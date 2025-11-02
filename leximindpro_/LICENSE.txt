@@ -1,0 +1,9 @@
+Copyright (c) 2025 Azra Hülya Cayak
+
+Tüm hakları saklıdır.
+
+Bu yazılım ve ilgili dokümantasyon dosyaları ("Yazılım"), telif hakkı sahibinin önceden yazılı izni olmaksızın çoğaltılamaz, dağıtılamaz, değiştirilemez veya ticari amaçlarla kullanılamaz.
+
+Yazılım "olduğu gibi" sağlanmaktadır ve açık veya zımni hiçbir garanti verilmemektedir. Telif hakkı sahibi, yazılımın kullanımından kaynaklanan herhangi bir zarardan sorumlu tutulamaz.
+
+İzinsiz kullanım, kopyalama, değiştirme veya dağıtım yasaktır ve yasal işlem başlatılmasına neden olabilir.
