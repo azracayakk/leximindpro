@@ -12,10 +12,6 @@ function GameSelector({ apiUrl, token, onClose }) {
   const [loading, setLoading] = useState(true);
   const [gameResult, setGameResult] = useState(null);
 
-  useEffect(() => {
-    fetchWords();
-  }, []);
-
   const fetchWords = async () => {
     try {
       const response = await fetch(`${apiUrl}/words`, {
@@ -33,6 +29,11 @@ function GameSelector({ apiUrl, token, onClose }) {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchWords();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleGameComplete = (score, correct, wrong) => {
     setGameResult({ score, correct, wrong });

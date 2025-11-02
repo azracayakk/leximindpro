@@ -1,9 +1,7 @@
-import React, { useState } from 'react';
+import React from 'react';
 import './Dashboard.css';
 
 function Dashboard({ user, onLogout, children, apiUrl, token }) {
-  const [menuOpen, setMenuOpen] = useState(false);
-
   const getRoleName = (role) => {
     const roles = {
       'admin': 'Yönetici',

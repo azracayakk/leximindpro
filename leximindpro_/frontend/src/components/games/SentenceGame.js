@@ -50,7 +50,10 @@ function SentenceGame({ words, onComplete, apiUrl, token, onClose }) {
   const getSentence = (word) => {
     if (word.example_sentences && word.example_sentences.length > 0) {
       const example = word.example_sentences[0];
-      return example.sentence.replace(new RegExp(word.english, 'gi'), '___');
+      // Replace only complete words (not parts of other words)
+      // Using word boundaries to match exact word
+      const escapedWord = word.english.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return example.sentence.replace(new RegExp(`\\b${escapedWord}\\b`, 'gi'), '___');
     }
     // Create a simple sentence if no example exists
     return `I like ___ very much.`;
@@ -61,27 +64,31 @@ function SentenceGame({ words, onComplete, apiUrl, token, onClose }) {
     const isCorrect = answer === currentWord.english;
     
     setSelectedAnswer(answer);
+    setFeedback(isCorrect ? 'correct' : 'wrong');
 
+    // Calculate new values
+    const newScore = isCorrect ? score + 15 : score;
+    const newCorrectAnswers = isCorrect ? correctAnswers + 1 : correctAnswers;
+    const newWrongAnswers = isCorrect ? wrongAnswers : wrongAnswers + 1;
+
+    // Update state
     if (isCorrect) {
-      setScore(score + 15);
-      setCorrectAnswers(correctAnswers + 1);
-      setFeedback('correct');
+      setScore(newScore);
+      setCorrectAnswers(newCorrectAnswers);
     } else {
-      setWrongAnswers(wrongAnswers + 1);
-      setFeedback('wrong');
+      setWrongAnswers(newWrongAnswers);
     }
 
     setTimeout(() => {
       if (currentIndex + 1 < gameWords.length) {
         setCurrentIndex(currentIndex + 1);
       } else {
-        finishGame();
+        finishGame(newScore, newCorrectAnswers, newWrongAnswers);
       }
     }, 1500);
   };
 
-  const finishGame = async () => {
-    const finalScore = score;
+  const finishGame = async (finalScore, finalCorrect, finalWrong) => {
     try {
       await fetch(`${apiUrl}/games/scores`, {
         method: 'POST',
@@ -92,14 +99,14 @@ function SentenceGame({ words, onComplete, apiUrl, token, onClose }) {
         body: JSON.stringify({
           game_type: 'sentence',
           score: finalScore,
-          correct_answers: correctAnswers,
-          wrong_answers: wrongAnswers
+          correct_answers: finalCorrect,
+          wrong_answers: finalWrong
         })
       });
-      onComplete(finalScore, correctAnswers, wrongAnswers);
+      onComplete(finalScore, finalCorrect, finalWrong);
     } catch (error) {
       console.error('Error saving score:', error);
-      onComplete(finalScore, correctAnswers, wrongAnswers);
+      onComplete(finalScore, finalCorrect, finalWrong);
     }
   };
 
