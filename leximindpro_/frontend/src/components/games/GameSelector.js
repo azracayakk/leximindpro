@@ -6,7 +6,79 @@ import SpeedGame from './SpeedGame';
 import SentenceGame from './SentenceGame';
 import StoryMode from './StoryMode';
 
-function GameSelector({ apiUrl, token, onClose }) {
+const getPerformanceFeedback = (score, correct, wrong) => {
+  const totalAttempts = correct + wrong;
+  const accuracy = totalAttempts > 0 ? correct / totalAttempts : 1;
+  const accuracyPercent = Math.round(accuracy * 100);
+
+  if (totalAttempts === 0) {
+    return {
+      totalAttempts,
+      accuracy,
+      accuracyPercent: 100,
+      type: 'celebration',
+      icon: '🎉',
+      title: 'Harika Başlangıç!',
+      message: 'İlk turun hazır. Yeni bir oyuna geçerek öğrenmeye devam edebilirsin.',
+      suggestions: [
+        'Farklı bir oyun modu seçerek kelime dağarcığını genişlet.',
+        'Öğrendiğin yeni kelimeleri not al ve gün içinde kullan.',
+        'Kısa bir quiz çözerek kelimeleri pekiştir.'
+      ]
+    };
+  }
+
+  if (accuracy >= 0.85) {
+    return {
+      totalAttempts,
+      accuracy,
+      accuracyPercent,
+      type: 'celebration',
+      icon: '🎉',
+      title: 'Harika İş!',
+      message: `Tebrikler! Doğruluk oranı %${accuracyPercent}. Yeni bir oyuna hazırsın.`,
+      suggestions: [
+        'Yeni bir oyun modunu dene ve puanını daha da yükselt.',
+        'Kelime listesinde ileri seviye kelimelere göz at.',
+        'Başarını öğretmeninle paylaş ya da liderlik tablosunu kontrol et.'
+      ]
+    };
+  }
+
+  if (accuracy >= 0.6) {
+    return {
+      totalAttempts,
+      accuracy,
+      accuracyPercent,
+      type: 'encouraging',
+      icon: '💪',
+      title: 'Güzel Gidiyorsun!',
+      message: `Doğruluk oranı %${accuracyPercent}. Ufak tekrarlarla becerilerini güçlendirebilirsin.`,
+      suggestions: [
+        'Az yanıldığın kelimeleri favorilere ekleyip yeniden gözden geçir.',
+        'Aynı oyunu bir tur daha oyna ve doğruluk oranını artır.',
+        'Haftalık quizde kısa bir test çözerek bilgini tazele.'
+      ]
+    };
+  }
+
+  return {
+    totalAttempts,
+    accuracy,
+    accuracyPercent,
+    type: 'improve',
+    icon: '🧠',
+    title: 'Tekrar Zamanı!',
+    message: `Bu oyunda doğruluk %${accuracyPercent}. Zorlandığın kelimeleri tekrar çalış, bir sonraki turda farkı göreceksin.`,
+    suggestions: [
+      'Kelime listesinde yanlış yaptığın kelimeleri tekrar çalış.',
+      'Tekrar oyna butonuyla aynı oyunu dene ve doğru cevaplara odaklan.',
+      'Kişisel öğrenme planındaki önerilen kelimelere göz at.'
+    ]
+  };
+};
+
+function GameSelector({ apiUrl, token, onClose, onNavigate = () => {} }) {
   const [selectedGame, setSelectedGame] = useState(null);
   const [words, setWords] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -35,8 +107,24 @@ function GameSelector({ apiUrl, token, onClose }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const showResult = (score = 0, correct = 0, wrong = 0) => {
+    const performance = getPerformanceFeedback(score, correct, wrong);
+    setGameResult({
+      score,
+      correct,
+      wrong,
+      ...performance
+    });
+  };
+
   const handleGameComplete = (score, correct, wrong) => {
-    setGameResult({ score, correct, wrong });
+    setSelectedGame(null);
+    showResult(score, correct, wrong);
+  };
+
+  const handleGameExit = (score = 0, correct = 0, wrong = 0) => {
+    setSelectedGame(null);
+    showResult(score, correct, wrong);
   };
 
   const handlePlayAgain = () => {
@@ -48,6 +136,11 @@ function GameSelector({ apiUrl, token, onClose }) {
     onClose();
   };
 
+  const handleNavigate = (targetTab) => {
+    onNavigate(targetTab);
+    onClose();
+  };
+
   if (loading) {
     return <div className="loading">Yükleniyor...</div>;
   }
@@ -56,7 +149,12 @@ function GameSelector({ apiUrl, token, onClose }) {
     return (
       <div className="game-result-container">
         <div className="game-result">
-          <h2>🎉 Tebrikler!</h2>
+          <div className="result-feedback">
+            <h2 className={`result-title ${gameResult.type}`}>
+              {gameResult.icon} {gameResult.title}
+            </h2>
+            <p className="result-message">{gameResult.message}</p>
+          </div>
           <div className="result-stats">
             <div className="result-stat">
               <span className="result-label">Toplam Puan</span>
@@ -70,6 +168,38 @@ function GameSelector({ apiUrl, token, onClose }) {
               <span className="result-label">Yanlış Cevap</span>
               <span className="result-value wrong">❌ {gameResult.wrong}</span>
             </div>
+            <div className="result-stat">
+              <span className="result-label">Doğruluk</span>
+              <span className="result-value accuracy">{gameResult.accuracyPercent}%</span>
+            </div>
+          </div>
+          <div className="result-suggestions">
+            <h3>Bir Sonraki Adım</h3>
+            <ul>
+              {gameResult.suggestions.map((suggestion, index) => (
+                <li key={index}>{suggestion}</li>
+              ))}
+            </ul>
+          </div>
+          <div className="result-quick-links">
+            <button
+              className="btn-ghost"
+              onClick={() => handleNavigate('words')}
+            >
+              📚 Kelime Listesine Git
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => handleNavigate('weeklyQuiz')}
+            >
+              📝 Haftalık Quiz Çöz
+            </button>
+            <button
+              className="btn-ghost"
+              onClick={() => handleNavigate('leaderboard')}
+            >
+              🏅 Liderlik Tablosunu Gör
+            </button>
           </div>
           <div className="result-actions">
             <button className="btn-secondary" onClick={handlePlayAgain}>
@@ -101,7 +231,7 @@ function GameSelector({ apiUrl, token, onClose }) {
         apiUrl={apiUrl}
         token={token}
         onComplete={handleGameComplete}
-        onClose={() => setSelectedGame(null)}
+        onClose={handleGameExit}
       />
     );
   }

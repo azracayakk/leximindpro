@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import './GameStyles.css';
 
-function StoryMode({ onComplete, apiUrl, token, onClose }) {
+function StoryMode({ apiUrl, token, onClose }) {
   const [difficulty, setDifficulty] = useState('beginner');
   const [topic, setTopic] = useState('');
   const [story, setStory] = useState(null);
@@ -45,8 +45,8 @@ function StoryMode({ onComplete, apiUrl, token, onClose }) {
     }
   };
 
-  const handleClose = () => {
-    onComplete(0, 0, 0);
+  const handleExit = () => {
+    onClose(0, 0, 0);
   };
 
   const resetStory = () => {
@@ -59,7 +59,7 @@ function StoryMode({ onComplete, apiUrl, token, onClose }) {
       <div className="game-container story-mode">
         <div className="game-header">
           <div className="game-header-left">
-            <button className="back-button" onClick={onClose}>
+            <button className="back-button" onClick={handleExit}>
               ← Geri
             </button>
             <h2>📖 AI Hikaye Modu</h2>
@@ -95,7 +95,7 @@ function StoryMode({ onComplete, apiUrl, token, onClose }) {
           <button className="btn-secondary" onClick={resetStory}>
             Başka Hikaye Oluştur
           </button>
-          <button className="btn-primary" onClick={handleClose}>
+          <button className="btn-primary" onClick={handleExit}>
             Bitir
           </button>
         </div>
@@ -107,7 +107,7 @@ function StoryMode({ onComplete, apiUrl, token, onClose }) {
     <div className="game-container story-mode">
       <div className="game-header">
         <div className="game-header-left">
-          <button className="back-button" onClick={handleClose}>
+          <button className="back-button" onClick={handleExit}>
             ← Geri
           </button>
           <h2>📖 AI Hikaye Modu</h2>

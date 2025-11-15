@@ -95,6 +95,10 @@ function SpeedGame({ words, onComplete, apiUrl, token, onClose }) {
     }
   };
 
+  const handleExit = () => {
+    onClose(score, correctAnswers, wrongAnswers);
+  };
+
   if (gameWords.length === 0) {
     return <div className="loading">Oyun hazırlanıyor...</div>;
   }
@@ -118,7 +122,7 @@ function SpeedGame({ words, onComplete, apiUrl, token, onClose }) {
     <div className="game-container speed-game">
       <div className="game-header">
         <div className="game-header-left">
-          <button className="back-button" onClick={onClose}>
+          <button className="back-button" onClick={handleExit}>
             ← Geri
           </button>
           <h2>⚡ Hız Yarışması</h2>

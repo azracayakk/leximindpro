@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { toast } from 'react-toastify';
 import './AdminPanel.css';
-import GameSelector from './games/GameSelector';
 
 function AdminPanel({ user, token, apiUrl }) {
   const [showDashboard, setShowDashboard] = useState(true);
@@ -150,14 +149,47 @@ function AdminPanel({ user, token, apiUrl }) {
   const [users, setUsers] = useState([]);
   const [words, setWords] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [newUser, setNewUser] = useState({ username: '', password: '', role: 'student', class_name: '' });
+  const [newUser, setNewUser] = useState({ username: '', password: '', role: 'student', class_name: '', institution_id: '' });
   const [newWord, setNewWord] = useState({ english: '', turkish: '', difficulty: 1, category: 'general' });
   const [csvFile, setCsvFile] = useState(null);
   const [csvLoading, setCsvLoading] = useState(false);
   const [filterDifficulty, setFilterDifficulty] = useState('all');
   const [filterCategory, setFilterCategory] = useState('all');
   const [aiLoading, setAiLoading] = useState(false);
-  const [showGames, setShowGames] = useState(false);
+  const [systemReport, setSystemReport] = useState(null);
+  const [systemReportLoading, setSystemReportLoading] = useState(false);
+  const [institutions, setInstitutions] = useState([]);
+  const [institutionsLoading, setInstitutionsLoading] = useState(false);
+  const [institutionForm, setInstitutionForm] = useState({
+    name: '',
+    description: '',
+    teacher_limit: 5,
+    student_limit: 100
+  });
+  const [assignTeacherForm, setAssignTeacherForm] = useState({
+    institution_id: '',
+    teacher_id: ''
+  });
+  const [classForm, setClassForm] = useState({
+    institution_id: '',
+    name: '',
+    description: '',
+    teacher_id: ''
+  });
+  const [masterWordsLoading, setMasterWordsLoading] = useState(false);
+  const [pendingWords, setPendingWords] = useState([]);
+  const [approvedWordsCount, setApprovedWordsCount] = useState(0);
+  const [wordPacks, setWordPacks] = useState([]);
+  const [wordPackForm, setWordPackForm] = useState({
+    name: '',
+    description: '',
+    level: 'A1',
+    words: ''
+  });
+  const [categories, setCategories] = useState(['general', 'animals', 'food', 'education', 'verbs', 'adjectives']);
+  const [systemSettings, setSystemSettings] = useState(null);
+  const [settingsLoading, setSettingsLoading] = useState(false);
+  const [newCategory, setNewCategory] = useState('');
   const [leaderboard, setLeaderboard] = useState([]);
   const [achievements, setAchievements] = useState([]);
   const [userAchievements, setUserAchievements] = useState([]);
@@ -167,6 +199,7 @@ function AdminPanel({ user, token, apiUrl }) {
     if (!showDashboard) {
       if (activeTab === 'users') {
         fetchUsers();
+        fetchInstitutions();
       } else if (activeTab === 'words') {
         fetchWords();
       } else if (activeTab === 'leaderboard') {
@@ -175,6 +208,17 @@ function AdminPanel({ user, token, apiUrl }) {
         fetchAchievements();
       } else if (activeTab === 'league') {
         fetchLeague();
+      } else if (activeTab === 'system') {
+        fetchSystemReport();
+      } else if (activeTab === 'institutions') {
+        fetchInstitutions();
+        if (users.length === 0) {
+          fetchUsers();
+        }
+      } else if (activeTab === 'masterWords') {
+        fetchMasterWords();
+      } else if (activeTab === 'settings') {
+        fetchSystemSettings();
       }
     }
   }, [activeTab, showDashboard]);
@@ -215,6 +259,84 @@ function AdminPanel({ user, token, apiUrl }) {
     setLoading(false);
   };
 
+  const fetchSystemReport = async () => {
+    setSystemReportLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/admin/system-report`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSystemReport(data);
+      }
+    } catch (error) {
+      console.error('Error fetching system report:', error);
+    }
+    setSystemReportLoading(false);
+  };
+
+  const fetchInstitutions = async () => {
+    setInstitutionsLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/admin/institutions`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setInstitutions(data.institutions || []);
+      }
+    } catch (error) {
+      console.error('Error fetching institutions:', error);
+    }
+    setInstitutionsLoading(false);
+  };
+
+  const fetchMasterWords = async () => {
+    setMasterWordsLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/admin/master-words`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPendingWords(data.pending_words || []);
+        setApprovedWordsCount(data.approved_count || 0);
+        setWordPacks(data.word_packs || []);
+        setCategories(data.categories || []);
+      }
+    } catch (error) {
+      console.error('Error fetching master words:', error);
+    }
+    setMasterWordsLoading(false);
+  };
+
+  const fetchSystemSettings = async () => {
+    setSettingsLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/admin/system-settings`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setSystemSettings(data);
+        if (data.categories) {
+          setCategories(data.categories);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching system settings:', error);
+    }
+    setSettingsLoading(false);
+  };
+
   const handleCreateUser = async (e) => {
     e.preventDefault();
     try {
@@ -228,8 +350,11 @@ function AdminPanel({ user, token, apiUrl }) {
       });
       if (response.ok) {
         toast.success('✅ Kullanıcı başarıyla oluşturuldu!');
-        setNewUser({ username: '', password: '', role: 'student', class_name: '' });
+        setNewUser({ username: '', password: '', role: 'student', class_name: '', institution_id: '' });
         fetchUsers();
+        if (activeTab === 'institutions') {
+          fetchInstitutions();
+        }
       } else {
         const data = await response.json();
         toast.error(data.detail || 'Kullanıcı oluşturulamadı');
@@ -237,6 +362,246 @@ function AdminPanel({ user, token, apiUrl }) {
     } catch (error) {
       toast.error('Hata oluştu: ' + error.message);
     }
+  };
+
+  const handleCreateInstitution = async (event) => {
+    event.preventDefault();
+    try {
+      const response = await fetch(`${apiUrl}/admin/institutions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify(institutionForm)
+      });
+      if (response.ok) {
+        toast.success('🏛️ Kurum oluşturuldu');
+        setInstitutionForm({ name: '', description: '', teacher_limit: 5, student_limit: 100 });
+        fetchInstitutions();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Kurum oluşturulamadı');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleAssignTeacher = async (event) => {
+    event.preventDefault();
+    if (!assignTeacherForm.institution_id || !assignTeacherForm.teacher_id) {
+      toast.error('Lütfen kurum ve öğretmen seçin.');
+      return;
+    }
+    try {
+      const response = await fetch(`${apiUrl}/admin/institutions/${assignTeacherForm.institution_id}/assign-teacher`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ teacher_id: assignTeacherForm.teacher_id })
+      });
+      if (response.ok) {
+        toast.success('👩‍🏫 Öğretmen kuruma atandı');
+        setAssignTeacherForm({ institution_id: '', teacher_id: '' });
+        fetchInstitutions();
+        fetchUsers();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Öğretmen atanamadı');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleCreateInstitutionClass = async (event) => {
+    event.preventDefault();
+    if (!classForm.institution_id || !classForm.name.trim()) {
+      toast.error('Lütfen kurum ve sınıf adını girin.');
+      return;
+    }
+    try {
+      const response = await fetch(`${apiUrl}/admin/institutions/${classForm.institution_id}/classes`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          name: classForm.name,
+          description: classForm.description,
+          institution_id: classForm.institution_id,
+          teacher_id: classForm.teacher_id || null
+        })
+      });
+      if (response.ok) {
+        toast.success('🏫 Sınıf oluşturuldu');
+        setClassForm({ institution_id: classForm.institution_id, name: '', description: '', teacher_id: '' });
+        fetchInstitutions();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Sınıf oluşturulamadı');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleApproveWord = async (wordId) => {
+    try {
+      const response = await fetch(`${apiUrl}/admin/words/${wordId}/approve`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        toast.success('✅ Kelime onaylandı');
+        fetchMasterWords();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Kelime onaylanamadı');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleRejectWord = async (wordId) => {
+    if (!window.confirm('Bu kelimeyi kalıcı olarak silmek istediğinize emin misiniz?')) return;
+    try {
+      const response = await fetch(`${apiUrl}/teacher/words/${wordId}`, {
+        method: 'DELETE',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        toast.success('🗑️ Kelime silindi');
+        fetchMasterWords();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Kelime silinemedi');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleCreateWordPack = async (event) => {
+    event.preventDefault();
+    const wordsArray = wordPackForm.words
+      .split(',')
+      .map((word) => word.trim())
+      .filter(Boolean);
+    try {
+      const response = await fetch(`${apiUrl}/admin/word-packs`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          name: wordPackForm.name,
+          description: wordPackForm.description,
+          level: wordPackForm.level,
+          words: wordsArray
+        })
+      });
+      if (response.ok) {
+        toast.success('📦 Kelime paketi oluşturuldu');
+        setWordPackForm({ name: '', description: '', level: 'A1', words: '' });
+        fetchMasterWords();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Kelime paketi oluşturulamadı');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const handleAddCategory = () => {
+    if (!newCategory.trim()) return;
+    if (categories.includes(newCategory.trim())) {
+      toast.info('Bu kategori zaten mevcut.');
+      return;
+    }
+    setCategories((prev) => [...prev, newCategory.trim()]);
+    setNewCategory('');
+  };
+
+  const handleRemoveCategory = (category) => {
+    setCategories((prev) => prev.filter((item) => item !== category));
+  };
+
+  const handleSettingsSave = async (event) => {
+    event.preventDefault();
+    try {
+      const response = await fetch(`${apiUrl}/admin/system-settings`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          maintenance_mode: systemSettings?.maintenance_mode,
+          feature_flags: systemSettings?.feature_flags,
+          email: systemSettings?.email,
+          api_keys: systemSettings?.api_keys,
+          categories
+        })
+      });
+      if (response.ok) {
+        toast.success('⚙️ Ayarlar güncellendi');
+        fetchSystemSettings();
+      } else {
+        const data = await response.json();
+        toast.error(data.detail || 'Ayarlar güncellenemedi');
+      }
+    } catch (error) {
+      toast.error('Hata oluştu: ' + error.message);
+    }
+  };
+
+  const toggleMaintenanceMode = () => {
+    setSystemSettings((prev) => ({
+      ...prev,
+      maintenance_mode: !prev?.maintenance_mode
+    }));
+  };
+
+  const toggleFeatureFlag = (flagKey) => {
+    setSystemSettings((prev) => ({
+      ...prev,
+      feature_flags: {
+        ...(prev?.feature_flags || {}),
+        [flagKey]: !prev?.feature_flags?.[flagKey]
+      }
+    }));
+  };
+
+  const handleEmailChange = (field, value) => {
+    setSystemSettings((prev) => ({
+      ...prev,
+      email: {
+        ...(prev?.email || {}),
+        [field]: value
+      }
+    }));
+  };
+
+  const handleApiKeyChange = (field, value) => {
+    setSystemSettings((prev) => ({
+      ...prev,
+      api_keys: {
+        ...(prev?.api_keys || {}),
+        [field]: value
+      }
+    }));
   };
 
   const handleCreateWord = async (e) => {
@@ -467,55 +832,47 @@ function AdminPanel({ user, token, apiUrl }) {
 
   const dashboardCards = [
     {
-      id: 'games',
-      icon: '🎮',
-      title: 'Oyunlar',
-      description: 'Eğlenceli oyunlarla kelime öğren',
-      color: '#a855f7',
-      onClick: () => setShowGames(true)
+      id: 'system',
+      icon: '📈',
+      title: 'Sistem Raporları',
+      description: 'Platformun genel sağlığını izleyin',
+      color: '#2563eb',
+      onClick: () => {
+        setShowDashboard(false);
+        setActiveTab('system');
+      }
     },
     {
-      id: 'words',
+      id: 'institutions',
+      icon: '🏛️',
+      title: 'Kurum & Sınıf Yönetimi',
+      description: 'Okulları ve sınıfları yönetin',
+      color: '#8b5cf6',
+      onClick: () => {
+        setShowDashboard(false);
+        setActiveTab('institutions');
+      }
+    },
+    {
+      id: 'masterWords',
       icon: '📚',
-      title: 'Kelime Yönetimi',
-      description: 'Kelime setleri oluştur ve düzenle',
+      title: 'Ana Kelime Kütüphanesi',
+      description: 'Kelime onaylama ve paket yönetimi',
       color: '#10b981',
       onClick: () => {
         setShowDashboard(false);
-        setActiveTab('words');
+        setActiveTab('masterWords');
       }
     },
     {
-      id: 'leaderboard',
-      icon: '🏆',
-      title: 'Liderlik Tablosu',
-      description: 'Sınıf sıralamasını gör',
-      color: '#f59e0b',
+      id: 'settings',
+      icon: '⚙️',
+      title: 'Sistem Ayarları',
+      description: 'Bakım modu ve özellik yönetimi',
+      color: '#f97316',
       onClick: () => {
         setShowDashboard(false);
-        setActiveTab('leaderboard');
-      }
-    },
-    {
-      id: 'achievements',
-      icon: '🏅',
-      title: 'Başarılar',
-      description: 'Rozetlerini ve başarılarını gör',
-      color: '#f59e0b',
-      onClick: () => {
-        setShowDashboard(false);
-        setActiveTab('achievements');
-      }
-    },
-    {
-      id: 'league',
-      icon: '🏆',
-      title: 'Haftalık Lig',
-      description: 'Lig sıralaması ve yarışma',
-      color: '#f59e0b',
-      onClick: () => {
-        setShowDashboard(false);
-        setActiveTab('league');
+        setActiveTab('settings');
       }
     },
     {
@@ -530,21 +887,17 @@ function AdminPanel({ user, token, apiUrl }) {
       }
     },
     {
-      id: 'admin',
-      icon: '⚙️',
-      title: 'Admin Paneli',
-      description: 'Sistem yönetimi',
-      color: '#6b7280',
+      id: 'words',
+      icon: '📝',
+      title: 'Kelime Yönetimi',
+      description: 'Kelime setleri oluştur ve düzenle',
+      color: '#f59e0b',
       onClick: () => {
         setShowDashboard(false);
-        setActiveTab('users');
+        setActiveTab('words');
       }
     }
   ];
-
-  if (showGames) {
-    return <GameSelector apiUrl={apiUrl} token={token} onClose={() => setShowGames(false)} />;
-  }
 
   if (showDashboard) {
     const mainCards = dashboardCards.slice(0, 6);
@@ -798,6 +1151,30 @@ function AdminPanel({ user, token, apiUrl }) {
       
       <div className="tabs">
         <button 
+          className={activeTab === 'system' ? 'active' : ''} 
+          onClick={() => setActiveTab('system')}
+        >
+          📈 Sistem Raporları
+        </button>
+        <button 
+          className={activeTab === 'institutions' ? 'active' : ''} 
+          onClick={() => setActiveTab('institutions')}
+        >
+          🏛️ Kurumlar
+        </button>
+        <button 
+          className={activeTab === 'masterWords' ? 'active' : ''} 
+          onClick={() => setActiveTab('masterWords')}
+        >
+          📚 Ana Kütüphane
+        </button>
+        <button 
+          className={activeTab === 'settings' ? 'active' : ''} 
+          onClick={() => setActiveTab('settings')}
+        >
+          ⚙️ Ayarlar
+        </button>
+        <button 
           className={activeTab === 'users' ? 'active' : ''} 
           onClick={() => setActiveTab('users')}
         >
@@ -836,6 +1213,429 @@ function AdminPanel({ user, token, apiUrl }) {
       </div>
 
       <div className="tab-content">
+        {activeTab === 'system' && (
+          <div className="system-section">
+            <h3>Sistem Raporları</h3>
+            {systemReportLoading ? (
+              <p>Yükleniyor...</p>
+            ) : !systemReport ? (
+              <p>Rapor verisi alınamadı.</p>
+            ) : (
+              <>
+                <div className="report-grid">
+                  <div className="report-card">
+                    <h4>Kullanıcılar</h4>
+                    <ul>
+                      <li>Toplam Öğretmen: <strong>{systemReport.users?.total_teachers ?? 0}</strong></li>
+                      <li>Toplam Öğrenci: <strong>{systemReport.users?.total_students ?? 0}</strong></li>
+                      <li>Bugün Yeni: <strong>{systemReport.users?.new_today ?? 0}</strong></li>
+                      <li>Bu Hafta Yeni: <strong>{systemReport.users?.new_this_week ?? 0}</strong></li>
+                      <li>Aktif Şu An: <strong>{systemReport.users?.active_now ?? 0}</strong></li>
+                    </ul>
+                  </div>
+                  <div className="report-card">
+                    <h4>İçerik</h4>
+                    <ul>
+                      <li>Onaylı Kelime Sayısı: <strong>{systemReport.content?.total_words ?? 0}</strong></li>
+                    </ul>
+                    <h5>Popüler Kelimeler</h5>
+                    <ul className="compact-list">
+                      {(systemReport.content?.popular_words || []).map((word) => (
+                        <li key={word._id}>
+                          <strong>{word._id}</strong> {word.turkish ? `(${word.turkish})` : ''} – {word.count || 0}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="report-card">
+                    <h4>Aktivite</h4>
+                    <h5>Günlük Oyun Sayısı</h5>
+                    <ul className="compact-list">
+                      {(systemReport.activity?.daily_games || []).map((item) => (
+                        <li key={item.date}>
+                          {item.date}: <strong>{item.count}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="report-card">
+                    <h4>Lig Zirvesi</h4>
+                    <ul className="compact-list">
+                      {(systemReport.activity?.league_top || []).map((standing) => (
+                        <li key={standing.user_id || standing.username}>
+                          #{standing.rank || '-'} {standing.username} – {standing.points} puan
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <p className="report-timestamp">
+                  Güncelleme: {new Date(systemReport.generated_at).toLocaleString('tr-TR')}
+                </p>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'institutions' && (
+          <div className="institutions-section">
+            <h3>Kurum ve Sınıf Yönetimi</h3>
+
+            <form className="create-form" onSubmit={handleCreateInstitution}>
+              <h4>Yeni Kurum Ekle</h4>
+              <div className="form-row">
+                <input
+                  type="text"
+                  placeholder="Kurum Adı"
+                  value={institutionForm.name}
+                  onChange={(e) => setInstitutionForm({ ...institutionForm, name: e.target.value })}
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Açıklama (opsiyonel)"
+                  value={institutionForm.description}
+                  onChange={(e) => setInstitutionForm({ ...institutionForm, description: e.target.value })}
+                />
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Öğretmen Kotası"
+                  value={institutionForm.teacher_limit}
+                  onChange={(e) => setInstitutionForm({ ...institutionForm, teacher_limit: parseInt(e.target.value, 10) || 1 })}
+                />
+                <input
+                  type="number"
+                  min="1"
+                  placeholder="Öğrenci Kotası"
+                  value={institutionForm.student_limit}
+                  onChange={(e) => setInstitutionForm({ ...institutionForm, student_limit: parseInt(e.target.value, 10) || 1 })}
+                />
+                <button type="submit">Ekle</button>
+              </div>
+            </form>
+
+            <form className="create-form secondary" onSubmit={handleAssignTeacher}>
+              <h4>Öğretmen Ata</h4>
+              <div className="form-row">
+                <select
+                  value={assignTeacherForm.institution_id}
+                  onChange={(e) => setAssignTeacherForm({ ...assignTeacherForm, institution_id: e.target.value })}
+                  required
+                >
+                  <option value="">Kurum Seçin</option>
+                  {institutions.map((institution) => (
+                    <option key={institution.id} value={institution.id}>
+                      {institution.name}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={assignTeacherForm.teacher_id}
+                  onChange={(e) => setAssignTeacherForm({ ...assignTeacherForm, teacher_id: e.target.value })}
+                  required
+                >
+                  <option value="">Öğretmen Seçin</option>
+                  {users.filter((u) => u.role === 'teacher').map((teacher) => (
+                    <option key={teacher.id} value={teacher.id}>
+                      {teacher.username} {teacher.institution_name ? `(${teacher.institution_name})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button type="submit">Ata</button>
+              </div>
+            </form>
+
+            <form className="create-form secondary" onSubmit={handleCreateInstitutionClass}>
+              <h4>Kurum Altında Yeni Sınıf</h4>
+              <div className="form-row">
+                <select
+                  value={classForm.institution_id}
+                  onChange={(e) => setClassForm({ ...classForm, institution_id: e.target.value })}
+                  required
+                >
+                  <option value="">Kurum Seçin</option>
+                  {institutions.map((institution) => (
+                    <option key={institution.id} value={institution.id}>
+                      {institution.name}
+                    </option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  placeholder="Sınıf Adı"
+                  value={classForm.name}
+                  onChange={(e) => setClassForm({ ...classForm, name: e.target.value })}
+                  required
+                />
+                <input
+                  type="text"
+                  placeholder="Açıklama (opsiyonel)"
+                  value={classForm.description}
+                  onChange={(e) => setClassForm({ ...classForm, description: e.target.value })}
+                />
+                <select
+                  value={classForm.teacher_id}
+                  onChange={(e) => setClassForm({ ...classForm, teacher_id: e.target.value })}
+                >
+                  <option value="">Öğretmen Seç (opsiyonel)</option>
+                  {users.filter((u) => u.role === 'teacher').map((teacher) => (
+                    <option key={teacher.id} value={teacher.id}>
+                      {teacher.username} {teacher.institution_name ? `(${teacher.institution_name})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <button type="submit">Sınıf Ekle</button>
+              </div>
+            </form>
+
+            {institutionsLoading ? (
+              <p>Yükleniyor...</p>
+            ) : institutions.length === 0 ? (
+              <p>Henüz kurum bulunmuyor.</p>
+            ) : (
+              <div className="institutions-grid">
+                {institutions.map((institution) => (
+                  <div key={institution.id} className="institution-card">
+                    <div className="institution-header">
+                      <h4>{institution.name}</h4>
+                      <span className="institution-meta">
+                        {institution.teacher_count}/{institution.teacher_limit} öğretmen · {institution.student_count}/{institution.student_limit} öğrenci
+                      </span>
+                    </div>
+                    {institution.description && <p className="institution-description">{institution.description}</p>}
+                    <div className="institution-classes">
+                      <h5>Sınıflar</h5>
+                      {institution.classes && institution.classes.length > 0 ? (
+                        <ul>
+                          {institution.classes.map((cls) => (
+                            <li key={cls.id}>
+                              <strong>{cls.name}</strong>
+                              {cls.teacher_name ? ` • ${cls.teacher_name}` : ''}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p>Henüz sınıf eklenmemiş.</p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'masterWords' && (
+          <div className="master-words-section">
+            <h3>Ana Kelime Kütüphanesi</h3>
+            <p className="subtext">Onay bekleyen kelimeleri inceleyin ve resmi kelime paketleri oluşturun.</p>
+
+            {masterWordsLoading ? (
+              <p>Yükleniyor...</p>
+            ) : (
+              <>
+                <div className="pending-words-card">
+                  <div className="pending-header">
+                    <h4>Onay Bekleyen Kelimeler</h4>
+                    <span>{pendingWords.length} kelime bekliyor</span>
+                  </div>
+                  {pendingWords.length === 0 ? (
+                    <p>Tüm kelimeler onaylandı!</p>
+                  ) : (
+                    <div className="pending-words-grid">
+                      {pendingWords.map((word) => (
+                        <div key={word.id} className="pending-word-card">
+                          <div className="pending-word-header">
+                            <strong>{word.english}</strong>
+                            <span>{word.turkish}</span>
+                          </div>
+                          <div className="pending-word-meta">
+                            <span>Seviye {word.difficulty}</span>
+                            <span>{word.category}</span>
+                            <span>Ekleyen: {word.created_by}</span>
+                          </div>
+                          <div className="pending-word-actions">
+                            <button onClick={() => handleApproveWord(word.id)}>Onayla</button>
+                            <button className="danger" onClick={() => handleRejectWord(word.id)}>Sil</button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                <div className="word-pack-wrapper">
+                  <div className="word-pack-list">
+                    <h4>Varsayılan Paketler</h4>
+                    <ul>
+                      {wordPacks.map((pack) => (
+                        <li key={pack.id}>
+                          <strong>{pack.name}</strong> ({pack.level || 'Seviye belirsiz'}) – {pack.words.length} kelime
+                        </li>
+                      ))}
+                    </ul>
+                    <p>Toplam onaylı kelime: <strong>{approvedWordsCount}</strong></p>
+                  </div>
+                  <form className="create-form" onSubmit={handleCreateWordPack}>
+                    <h4>Yeni Kelime Paketi Oluştur</h4>
+                    <div className="form-column">
+                      <input
+                        type="text"
+                        placeholder="Paket Adı"
+                        value={wordPackForm.name}
+                        onChange={(e) => setWordPackForm({ ...wordPackForm, name: e.target.value })}
+                        required
+                      />
+                      <input
+                        type="text"
+                        placeholder="Açıklama (opsiyonel)"
+                        value={wordPackForm.description}
+                        onChange={(e) => setWordPackForm({ ...wordPackForm, description: e.target.value })}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Seviye (örn: A1, B1)"
+                        value={wordPackForm.level}
+                        onChange={(e) => setWordPackForm({ ...wordPackForm, level: e.target.value })}
+                      />
+                      <textarea
+                        placeholder="Paket kelimeleri (virgülle ayırın)"
+                        value={wordPackForm.words}
+                        onChange={(e) => setWordPackForm({ ...wordPackForm, words: e.target.value })}
+                        rows={3}
+                      />
+                      <button type="submit">Paket Oluştur</button>
+                    </div>
+                  </form>
+                </div>
+
+                <div className="categories-card">
+                  <h4>Kategoriler</h4>
+                  <div className="categories-list">
+                    {categories.map((category) => (
+                      <span key={category} className="category-chip">
+                        {category}
+                        <button type="button" onClick={() => handleRemoveCategory(category)}>✕</button>
+                      </span>
+                    ))}
+                  </div>
+                  <div className="category-add-row">
+                    <input
+                      type="text"
+                      placeholder="Yeni kategori"
+                      value={newCategory}
+                      onChange={(e) => setNewCategory(e.target.value)}
+                    />
+                    <button type="button" onClick={handleAddCategory}>Ekle</button>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'settings' && (
+          <div className="settings-section">
+            <h3>Sistem Ayarları</h3>
+            {settingsLoading || !systemSettings ? (
+              <p>Yükleniyor...</p>
+            ) : (
+              <form className="settings-form" onSubmit={handleSettingsSave}>
+                <div className="settings-group">
+                  <h4>Bakım Modu</h4>
+                  <p>Sistemi geçici olarak bakım moduna alırsanız tüm kullanıcılar bilgi mesajı görür.</p>
+                  <button
+                    type="button"
+                    className={systemSettings.maintenance_mode ? 'toggle-btn active' : 'toggle-btn'}
+                    onClick={toggleMaintenanceMode}
+                  >
+                    {systemSettings.maintenance_mode ? 'Bakım Modu Aktif' : 'Bakım Modu Kapalı'}
+                  </button>
+                </div>
+
+                <div className="settings-group">
+                  <h4>Özellikler</h4>
+                  <div className="feature-flags">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={systemSettings.feature_flags?.weeklyLeague ?? true}
+                        onChange={() => toggleFeatureFlag('weeklyLeague')}
+                      />
+                      Haftalık Lig
+                    </label>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={systemSettings.feature_flags?.games ?? true}
+                        onChange={() => toggleFeatureFlag('games')}
+                      />
+                      Oyun Modülleri
+                    </label>
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h4>E-posta Ayarları</h4>
+                  <div className="settings-grid">
+                    <input
+                      type="text"
+                      placeholder="SMTP Sunucusu"
+                      value={systemSettings.email?.smtp_host || ''}
+                      onChange={(e) => handleEmailChange('smtp_host', e.target.value)}
+                    />
+                    <input
+                      type="number"
+                      placeholder="SMTP Port"
+                      value={systemSettings.email?.smtp_port || ''}
+                      onChange={(e) => handleEmailChange('smtp_port', parseInt(e.target.value, 10) || '')}
+                    />
+                    <input
+                      type="text"
+                      placeholder="SMTP Kullanıcısı"
+                      value={systemSettings.email?.smtp_user || ''}
+                      onChange={(e) => handleEmailChange('smtp_user', e.target.value)}
+                    />
+                    <input
+                      type="password"
+                      placeholder="SMTP Şifresi"
+                      value={systemSettings.email?.smtp_password || ''}
+                      onChange={(e) => handleEmailChange('smtp_password', e.target.value)}
+                    />
+                    <input
+                      type="email"
+                      placeholder="Gönderici E-posta"
+                      value={systemSettings.email?.sender || ''}
+                      onChange={(e) => handleEmailChange('sender', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <div className="settings-group">
+                  <h4>API Anahtarları</h4>
+                  <div className="settings-grid">
+                    <input
+                      type="text"
+                      placeholder="Çeviri Servisi Anahtarı"
+                      value={systemSettings.api_keys?.translation || ''}
+                      onChange={(e) => handleApiKeyChange('translation', e.target.value)}
+                    />
+                    <input
+                      type="text"
+                      placeholder="TTS Servisi Anahtarı"
+                      value={systemSettings.api_keys?.tts || ''}
+                      onChange={(e) => handleApiKeyChange('tts', e.target.value)}
+                    />
+                  </div>
+                </div>
+
+                <button type="submit" className="save-settings-btn">Ayarları Kaydet</button>
+              </form>
+            )}
+          </div>
+        )}
+
         {activeTab === 'users' && (
           <div className="users-section">
             <div className="section-header">
@@ -867,6 +1667,17 @@ function AdminPanel({ user, token, apiUrl }) {
                   <option value="teacher">Öğretmen</option>
                   <option value="admin">Yönetici</option>
                 </select>
+                <select
+                  value={newUser.institution_id}
+                  onChange={(e) => setNewUser({...newUser, institution_id: e.target.value})}
+                >
+                  <option value="">Kurumsuz</option>
+                  {institutions.map((institution) => (
+                    <option key={institution.id} value={institution.id}>
+                      {institution.name}
+                    </option>
+                  ))}
+                </select>
                 <input
                   type="text"
                   placeholder="Sınıf (opsiyonel)"
@@ -887,6 +1698,7 @@ function AdminPanel({ user, token, apiUrl }) {
                       <th>Kullanıcı Adı</th>
                       <th>Rol</th>
                       <th>Sınıf</th>
+                      <th>Kurum</th>
                       <th>Puan</th>
                       <th>İşlemler</th>
                     </tr>
@@ -897,6 +1709,7 @@ function AdminPanel({ user, token, apiUrl }) {
                         <td>{u.username}</td>
                         <td>{u.role}</td>
                         <td>{u.class_name || '-'}</td>
+                        <td>{u.institution_name || '-'}</td>
                         <td>{u.points || 0}</td>
                         <td>
                           {u.username !== 'admin' && (
@@ -961,11 +1774,11 @@ function AdminPanel({ user, token, apiUrl }) {
                 </select>
                 <select value={filterCategory} onChange={(e) => setFilterCategory(e.target.value)}>
                   <option value="all">Tüm Kategoriler</option>
-                  <option value="general">Genel</option>
-                  <option value="technology">Teknoloji</option>
-                  <option value="education">Eğitim</option>
-                  <option value="business">İş</option>
-                  <option value="daily">Günlük Yaşam</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
                 </select>
                 <span className="filter-count">{filteredWords.length} kelime</span>
               </div>

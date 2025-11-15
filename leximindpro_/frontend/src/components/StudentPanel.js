@@ -12,6 +12,14 @@ function StudentPanel({ user, token, apiUrl }) {
   const [leaderboard, setLeaderboard] = useState([]);
   const [league, setLeague] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [weeklyQuiz, setWeeklyQuiz] = useState(null);
+  const [quizStatus, setQuizStatus] = useState({ completed: false, result: null });
+  const [selectedAnswers, setSelectedAnswers] = useState({});
+  const [quizLoading, setQuizLoading] = useState(false);
+  const [quizSubmitting, setQuizSubmitting] = useState(false);
+  const [quizError, setQuizError] = useState(null);
+  const [activeWordQuiz, setActiveWordQuiz] = useState(null);
+  const [wordQuizFeedback, setWordQuizFeedback] = useState(null);
 
   useEffect(() => {
     if (activeTab === 'words') {
@@ -24,6 +32,8 @@ function StudentPanel({ user, token, apiUrl }) {
       fetchLeaderboard();
     } else if (activeTab === 'league') {
       fetchLeague();
+    } else if (activeTab === 'weeklyQuiz') {
+      fetchWeeklyQuiz();
     }
   }, [activeTab]);
 
@@ -126,13 +136,167 @@ function StudentPanel({ user, token, apiUrl }) {
     setLoading(false);
   };
 
+  const fetchWeeklyQuiz = async () => {
+    setQuizLoading(true);
+    setQuizError(null);
+    try {
+      const response = await fetch(`${apiUrl}/quizzes/weekly`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setWeeklyQuiz(data.quiz || null);
+        setQuizStatus({ completed: data.completed, result: data.result });
+        if (data.result && data.result.answers) {
+          const answerMap = {};
+          data.result.answers.forEach((answer) => {
+            answerMap[answer.question_id] = answer.selected_option;
+          });
+          setSelectedAnswers(answerMap);
+        } else {
+          setSelectedAnswers({});
+        }
+      } else {
+        setQuizError('Quiz bilgisi alınamadı.');
+      }
+    } catch (error) {
+      console.error('Error fetching weekly quiz:', error);
+      setQuizError('Quiz bilgisi alınırken bir hata oluştu.');
+    }
+    setQuizLoading(false);
+  };
+
+  const handleAnswerChange = (questionId, optionIndex) => {
+    setSelectedAnswers((prev) => ({
+      ...prev,
+      [questionId]: optionIndex
+    }));
+  };
+
+  const handleSubmitWeeklyQuiz = async (event) => {
+    event.preventDefault();
+    if (!weeklyQuiz || !weeklyQuiz.questions) {
+      return;
+    }
+
+    const unanswered = weeklyQuiz.questions.filter(
+      (question) => selectedAnswers[question.id] === undefined
+    );
+
+    if (unanswered.length > 0) {
+      setQuizError('Lütfen tüm soruları yanıtlayın.');
+      return;
+    }
+
+    setQuizSubmitting(true);
+    setQuizError(null);
+
+    try {
+      const response = await fetch(`${apiUrl}/quizzes/weekly/submit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({
+          quiz_id: weeklyQuiz.id,
+          answers: weeklyQuiz.questions.map((question) => ({
+            question_id: question.id,
+            selected_option: selectedAnswers[question.id]
+          }))
+        })
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setQuizStatus({ completed: true, result: data.result });
+        setWeeklyQuiz(data.quiz || weeklyQuiz);
+        if (data.result && data.result.answers) {
+          const answerMap = {};
+          data.result.answers.forEach((answer) => {
+            answerMap[answer.question_id] = answer.selected_option;
+          });
+          setSelectedAnswers(answerMap);
+        }
+      } else {
+        const errorData = await response.json();
+        setQuizError(errorData.detail || 'Quiz gönderilirken hata oluştu.');
+      }
+    } catch (error) {
+      console.error('Error submitting weekly quiz:', error);
+      setQuizError('Quiz gönderilirken beklenmeyen bir hata oluştu.');
+    }
+
+    setQuizSubmitting(false);
+  };
+
+  const pronounceWord = (word) => {
+    if (!word || !word.english) return;
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(word.english);
+      utterance.lang = 'en-US';
+      utterance.rate = 0.95;
+      utterance.pitch = 1;
+      window.speechSynthesis.speak(utterance);
+    }
+  };
+
+  const startWordMiniQuiz = (word) => {
+    if (!word || words.length === 0) return;
+    const distractors = words
+      .filter((w) => w.id !== word.id)
+      .sort(() => Math.random() - 0.5)
+      .slice(0, Math.min(3, words.length - 1))
+      .map((w) => ({
+        id: `${word.id}-${w.id}`,
+        text: w.turkish
+      }));
+    const options = [...distractors, { id: `${word.id}-correct`, text: word.turkish }]
+      .sort(() => Math.random() - 0.5);
+
+    setActiveWordQuiz({
+      wordId: word.id,
+      prompt: `"${word.english}" kelimesinin Türkçe karşılığı nedir?`,
+      correctAnswer: word.turkish,
+      options
+    });
+    setWordQuizFeedback(null);
+  };
+
+  const handleWordQuizAnswer = (wordId, selectedText) => {
+    if (!activeWordQuiz || activeWordQuiz.wordId !== wordId) {
+      return;
+    }
+    const isCorrect = selectedText === activeWordQuiz.correctAnswer;
+    setActiveWordQuiz((prev) =>
+      prev && prev.wordId === wordId ? { ...prev, selectedOption: selectedText } : prev
+    );
+    setWordQuizFeedback({
+      wordId,
+      isCorrect,
+      message: isCorrect
+        ? 'Harika! Doğru cevabı seçtin.'
+        : 'Tekrar dene! Doğru cevaba bir kez daha bak.'
+    });
+    if (isCorrect) {
+      setTimeout(() => {
+        setActiveWordQuiz(null);
+        setWordQuizFeedback(null);
+      }, 1800);
+    }
+  };
+
+  const closeWordQuiz = () => {
+    setActiveWordQuiz(null);
+    setWordQuizFeedback(null);
+  };
+
   const hasAchievement = (achievementId) => {
     return userAchievements.some(ua => ua.achievement_id === achievementId);
   };
-
-  if (showGames) {
-    return <GameSelector apiUrl={apiUrl} token={token} onClose={() => setShowGames(false)} />;
-  }
 
   return (
     <div className="student-panel">
@@ -181,6 +345,12 @@ function StudentPanel({ user, token, apiUrl }) {
           onClick={() => setActiveTab('games')}
         >
           🎮 Oyunlarım
+        </button>
+        <button 
+          className={activeTab === 'weeklyQuiz' ? 'active' : ''} 
+          onClick={() => setActiveTab('weeklyQuiz')}
+        >
+          📝 Haftalık Quiz
         </button>
         <button 
           className={activeTab === 'achievements' ? 'active' : ''} 
@@ -235,9 +405,11 @@ function StudentPanel({ user, token, apiUrl }) {
               <div className="words-grid">
                 {words.map((word) => (
                   <div key={word.id} className="word-card">
-                    <div className="word-front">
-                      <div className="word-english">{word.english}</div>
-                      <div className="word-turkish">{word.turkish}</div>
+                    <div className="word-card-header">
+                      <div className="word-card-header-left">
+                        <div className="word-english">{word.english}</div>
+                        <div className="word-turkish">{word.turkish}</div>
+                      </div>
                     </div>
                     <div className="word-meta">
                       <span className={`difficulty difficulty-${word.difficulty}`}>
@@ -245,6 +417,110 @@ function StudentPanel({ user, token, apiUrl }) {
                       </span>
                       <span className="category">{word.category}</span>
                     </div>
+                    {word.synonyms && word.synonyms.length > 0 && (
+                      <div className="word-synonyms">
+                        <span className="meta-title">Eş anlamlılar:</span>
+                        <div className="meta-chips">
+                          {word.synonyms.map((synonym, index) => (
+                            <span key={`${word.id}-syn-${index}`} className="meta-chip">
+                              {synonym}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {word.antonyms && word.antonyms.length > 0 && (
+                      <div className="word-antonyms">
+                        <span className="meta-title">Zıt anlamlılar:</span>
+                        <div className="meta-chips">
+                          {word.antonyms.map((antonym, index) => (
+                            <span key={`${word.id}-ant-${index}`} className="meta-chip antonym">
+                              {antonym}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {word.example_sentences && word.example_sentences.length > 0 && (
+                      <div className="word-examples">
+                        <span className="meta-title">Örnek cümleler:</span>
+                        <ul>
+                          {word.example_sentences.slice(0, 2).map((example, index) => (
+                            <li key={`${word.id}-ex-${index}`}>
+                              <span className="example-en">{example.sentence}</span>
+                              <span className="example-tr">{example.turkish}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    <div className="word-actions">
+                      <div className="word-action-buttons">
+                        <button
+                          className="pronunciation-button"
+                          onClick={() => pronounceWord(word)}
+                          title="Telaffuz dinle"
+                        >
+                          🔊 Telaffuz
+                        </button>
+                        <button className="btn-outline" onClick={() => startWordMiniQuiz(word)}>
+                          🎯 Mini Quiz
+                        </button>
+                      </div>
+                    </div>
+                    {activeWordQuiz && activeWordQuiz.wordId === word.id && (
+                      <div className="word-mini-quiz">
+                        <div className="mini-quiz-header">
+                          <span>{activeWordQuiz.prompt}</span>
+                          <button className="close-quiz" onClick={closeWordQuiz} title="Kapat">
+                            ✕
+                          </button>
+                        </div>
+                        <div className="mini-quiz-options">
+                          {activeWordQuiz.options.map((option) => {
+                            const isSelected =
+                              activeWordQuiz.wordId === word.id &&
+                              activeWordQuiz.selectedOption === option.text;
+                            const isCorrectOption =
+                              wordQuizFeedback &&
+                              wordQuizFeedback.wordId === word.id &&
+                              option.text === activeWordQuiz.correctAnswer &&
+                              wordQuizFeedback.isCorrect;
+                            const isWrongSelection =
+                              wordQuizFeedback &&
+                              wordQuizFeedback.wordId === word.id &&
+                              !wordQuizFeedback.isCorrect &&
+                              isSelected;
+                            const optionClassName = [
+                              'mini-quiz-option',
+                              isSelected ? 'selected' : '',
+                              isCorrectOption ? 'correct' : '',
+                              isWrongSelection ? 'incorrect' : ''
+                            ]
+                              .filter(Boolean)
+                              .join(' ');
+                            return (
+                              <button
+                                key={option.id}
+                                className={optionClassName}
+                                onClick={() => handleWordQuizAnswer(word.id, option.text)}
+                              >
+                                {option.text}
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {wordQuizFeedback && wordQuizFeedback.wordId === word.id && (
+                          <div
+                            className={`mini-quiz-feedback ${
+                              wordQuizFeedback.isCorrect ? 'correct' : 'incorrect'
+                            }`}
+                          >
+                            {wordQuizFeedback.message}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -277,6 +553,120 @@ function StudentPanel({ user, token, apiUrl }) {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'weeklyQuiz' && (
+          <div className="weekly-quiz-section">
+            <h3>Haftalık Quiz</h3>
+            {quizLoading ? (
+              <div className="loading">Yükleniyor...</div>
+            ) : quizError && !weeklyQuiz ? (
+              <div className="error-message">{quizError}</div>
+            ) : weeklyQuiz && weeklyQuiz.questions && weeklyQuiz.questions.length > 0 ? (
+              <form className="weekly-quiz-form" onSubmit={handleSubmitWeeklyQuiz}>
+                {quizError && <div className="error-message">{quizError}</div>}
+                {weeklyQuiz.questions.map((question, index) => {
+                  const userSelection = selectedAnswers[question.id];
+                  const isCompleted = quizStatus.completed;
+                  const correctIndex = question.correct_option_index;
+                  const resultAnswer = quizStatus.result && quizStatus.result.answers
+                    ? quizStatus.result.answers.find((answer) => answer.question_id === question.id)
+                    : null;
+                  const wasCorrect = isCompleted && resultAnswer
+                    ? resultAnswer.is_correct
+                    : false;
+
+                  return (
+                    <div
+                      key={question.id}
+                      className={`quiz-question ${isCompleted ? (wasCorrect ? 'correct' : 'incorrect') : ''}`}
+                    >
+                      <div className="quiz-question-title">
+                        {index + 1}. {question.prompt}
+                      </div>
+                      <div className="quiz-options">
+                        {question.options.map((option, optionIndex) => {
+                          let optionClass = 'quiz-option';
+                          if (!isCompleted && userSelection === optionIndex) {
+                            optionClass += ' selected';
+                          }
+                          if (isCompleted) {
+                            if (optionIndex === correctIndex) {
+                              optionClass += ' correct-option';
+                            } else if (optionIndex === userSelection) {
+                              optionClass += ' selected-option';
+                            }
+                          }
+                          return (
+                            <label
+                              key={`${question.id}-${optionIndex}`}
+                              className={optionClass}
+                            >
+                              <input
+                                type="radio"
+                                name={`question-${question.id}`}
+                                value={optionIndex}
+                                checked={userSelection === optionIndex}
+                                disabled={isCompleted}
+                                onChange={() => handleAnswerChange(question.id, optionIndex)}
+                              />
+                              <span>{option}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {isCompleted && resultAnswer && (
+                        <div className={`quiz-feedback ${wasCorrect ? 'correct' : 'incorrect'}`}>
+                          {wasCorrect
+                            ? 'Tebrikler! Bu soruya doğru cevap verdin.'
+                            : `Doğru cevap: ${question.options[resultAnswer.correct_option_index]}`}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+
+                {!quizStatus.completed && (
+                  <button type="submit" className="submit-quiz-button" disabled={quizSubmitting}>
+                    {quizSubmitting ? 'Gönderiliyor...' : 'Quizi Tamamla'}
+                  </button>
+                )}
+
+                {quizStatus.completed && quizStatus.result && (() => {
+                  const totalQuestions = quizStatus.result.total_questions || 0;
+                  const correctAnswers = quizStatus.result.correct_answers || 0;
+                  const accuracyPercent = totalQuestions > 0
+                    ? Math.round((correctAnswers / totalQuestions) * 100)
+                    : 0;
+                  const isSuccess = accuracyPercent >= 70;
+                  const feedbackMessage = isSuccess
+                    ? 'Tebrikler! Haftalık quizde harika bir başarı gösterdin.'
+                    : 'Kendini geliştir! Yanlış yaptığın soruları gözden geçirerek ilerleyebilirsin.';
+
+                  return (
+                    <div className="quiz-result-summary">
+                      <h4>Quiz Sonucu</h4>
+                      <p>Skor: {quizStatus.result.score}</p>
+                      <p>
+                        Doğru sayısı: {correctAnswers} / {totalQuestions}
+                      </p>
+                      <p>Başarı Oranı: %{accuracyPercent}</p>
+                      {quizStatus.result.submitted_at && (
+                        <p>
+                          Tamamlanma: {new Date(quizStatus.result.submitted_at).toLocaleString('tr-TR')}
+                        </p>
+                      )}
+                      <div className={`quiz-feedback-summary ${isSuccess ? 'success' : 'improve'}`}>
+                        {feedbackMessage}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </form>
+            ) : (
+              <p>Bu hafta için quiz henüz hazır değil.</p>
             )}
           </div>
         )}
@@ -395,7 +785,13 @@ function StudentPanel({ user, token, apiUrl }) {
                 setShowGames(false);
                 // Refresh user stats after game
                 fetchScores();
-              }} 
+              }}
+              onNavigate={(targetTab) => {
+                setShowGames(false);
+                if (targetTab) {
+                  setActiveTab(targetTab);
+                }
+              }}
             />
           </div>
         </div>

@@ -9,7 +9,8 @@ import json
 import re
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List, Optional
+from typing import List, Optional, Literal, Dict
+from collections import defaultdict
 import uuid
 from datetime import datetime, timezone, timedelta
 import jwt
@@ -27,12 +28,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Try to import emergentintegrations (optional)
-try:
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    EMERGENT_AVAILABLE = True
-except ImportError:
-    EMERGENT_AVAILABLE = False
-    logger.warning("emergentintegrations not available. AI features will be disabled.")
+# try:
+#     from emergentintegrations.llm.chat import llmChat, UserMessage
+#     EMERGENT_AVAILABLE = True
+# except ImportError:
+#     EMERGENT_AVAILABLE = False
+#     logger.warning("emergentintegrations not available. AI features will be disabled.")
+
+# AI özellikleri manuel olarak devre dışı bırakıldı (ve gecikme düzeltildi)
+EMERGENT_AVAILABLE = False
+EMERGENT_AVAILABLE = False
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL')
@@ -61,6 +66,41 @@ api_router = APIRouter(prefix="/api")
 
 # ============= MODELS =============
 
+SYSTEM_SETTINGS_ID = "global_settings"
+DEFAULT_SYSTEM_SETTINGS = {
+    "maintenance_mode": False,
+    "feature_flags": {
+        "weeklyLeague": True,
+        "games": True
+    },
+    "email": {
+        "smtp_host": "",
+        "smtp_port": 587,
+        "smtp_user": "",
+        "smtp_password": "",
+        "sender": "no-reply@leximindpro.com"
+    },
+    "api_keys": {
+        "translation": "",
+        "tts": ""
+    },
+    "categories": ["general", "animals", "food", "education", "verbs", "adjectives"]
+}
+
+
+async def get_system_settings():
+    settings = await db.system_settings.find_one({"_id": SYSTEM_SETTINGS_ID})
+    if not settings:
+        settings = {"_id": SYSTEM_SETTINGS_ID, **DEFAULT_SYSTEM_SETTINGS}
+        await db.system_settings.insert_one(settings)
+    else:
+        # Ensure all default keys exist
+        merged = DEFAULT_SYSTEM_SETTINGS.copy()
+        merged.update({k: settings.get(k, v) for k, v in DEFAULT_SYSTEM_SETTINGS.items()})
+        settings = {"_id": SYSTEM_SETTINGS_ID, **merged}
+        await db.system_settings.update_one({"_id": SYSTEM_SETTINGS_ID}, {"$set": settings}, upsert=True)
+    return settings
+
 class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -69,6 +109,8 @@ class User(BaseModel):
     role: str  # admin, teacher, student
     points: int = 0
     class_name: Optional[str] = None
+    institution_id: Optional[str] = None
+    institution_name: Optional[str] = None
     words_learned: int = 0
     games_played: int = 0
     streak: int = 0  # Günlük giriş serisi
@@ -91,6 +133,7 @@ class UserCreate(BaseModel):
     password: str
     role: str
     class_name: Optional[str] = None
+    institution_id: Optional[str] = None
 
 class UserLogin(BaseModel):
     username: str
@@ -102,6 +145,8 @@ class UserResponse(BaseModel):
     role: str
     points: int
     class_name: Optional[str] = None
+    institution_id: Optional[str] = None
+    institution_name: Optional[str] = None
     words_learned: int = 0
     games_played: int = 0
 
@@ -116,17 +161,86 @@ class Word(BaseModel):
     turkish: str
     difficulty: int = 1
     category: str = "general"  # A1, A2, B1, B2, C1, general
-    example_sentences: List[ExampleSentence] = []
+    synonyms: List[str] = Field(default_factory=list)
+    antonyms: List[str] = Field(default_factory=list)
+    example_sentences: List[ExampleSentence] = Field(default_factory=list)
     image_url: Optional[str] = None
     created_by: str
+    approved: bool = True
+    pack_ids: List[str] = Field(default_factory=list)
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class Classroom(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: Optional[str] = None
+    created_by: str
+    institution_id: Optional[str] = None
+    institution_name: Optional[str] = None
+    teacher_id: Optional[str] = None
+    teacher_name: Optional[str] = None
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class ClassCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    institution_id: Optional[str] = None
+    teacher_id: Optional[str] = None
+
+class Institution(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: Optional[str] = None
+    teacher_limit: int = 5
+    student_limit: int = 100
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class InstitutionCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    teacher_limit: int = 5
+    student_limit: int = 100
+
+class AssignTeacherRequest(BaseModel):
+    teacher_id: str
+
+class WordPack(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: Optional[str] = None
+    level: Optional[str] = None
+    words: List[str] = Field(default_factory=list)
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class WordPackCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    level: Optional[str] = None
+    words: List[str] = Field(default_factory=list)
+
+class SystemSettingsUpdate(BaseModel):
+    maintenance_mode: Optional[bool] = None
+    feature_flags: Optional[dict] = None
+    email: Optional[dict] = None
+    api_keys: Optional[dict] = None
+    categories: Optional[List[str]] = None
+
+class TeacherStudentCreate(BaseModel):
+    username: str
+    password: str
+    class_name: Optional[str] = None
 
 class WordCreate(BaseModel):
     english: str
     turkish: str
     difficulty: int = 1
     category: str = "general"
-    example_sentences: List[ExampleSentence] = []
+    synonyms: List[str] = Field(default_factory=list)
+    antonyms: List[str] = Field(default_factory=list)
+    example_sentences: List[ExampleSentence] = Field(default_factory=list)
 
 class BulkWordsUpload(BaseModel):
     words: List[dict]
@@ -156,6 +270,25 @@ class GameScoreCreate(BaseModel):
     correct_answers: int = 0
     wrong_answers: int = 0
     completed: bool = True
+
+class WordAssignment(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    assigned_by: str
+    assigned_by_name: Optional[str] = None
+    assigned_to_id: str
+    assigned_to_name: str
+    assigned_to_type: Literal["student", "class"]
+    word_ids: List[str]
+    status: str = "assigned"
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    due_date: Optional[str] = None
+
+class WordAssignmentCreate(BaseModel):
+    assigned_to_id: str
+    assigned_to_type: Literal["student", "class"]
+    word_ids: List[str]
+    due_date: Optional[str] = None
 
 class Achievement(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -227,6 +360,34 @@ class StoryProgress(BaseModel):
     highlighted_words: List[str] = []  # Word IDs used in story
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+class WeeklyQuizQuestion(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    prompt: str
+    options: List[str]
+    correct_option_index: int
+    word_id: Optional[str] = None
+
+class WeeklyQuiz(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    week_start: str
+    week_end: str
+    questions: List[WeeklyQuizQuestion]
+    created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class WeeklyQuizResult(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    quiz_id: str
+    user_id: str
+    username: str
+    score: int
+    total_questions: int
+    correct_answers: int
+    answers: List[dict] = []
+    submitted_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
 class TeacherReport(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -271,6 +432,10 @@ class TextToWordsRequest(BaseModel):
     text: str  # Teacher's text input
     auto_create: bool = True  # Auto-create words from text
 
+class WeeklyQuizSubmission(BaseModel):
+    quiz_id: str
+    answers: List[dict]
+
 # ============= HELPER FUNCTIONS =============
 
 def hash_password(password: str) -> str:
@@ -285,6 +450,40 @@ def create_access_token(data: dict) -> str:
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, JWT_SECRET_KEY, algorithm=JWT_ALGORITHM)
     return encoded_jwt
+
+def get_week_range(reference: Optional[datetime] = None) -> tuple[str, str]:
+    """Return ISO formatted start and end datetime for the current ISO week (Monday-Sunday)."""
+    if reference is None:
+        reference = datetime.now(timezone.utc)
+    else:
+        # Ensure timezone-aware
+        if reference.tzinfo is None:
+            reference = reference.replace(tzinfo=timezone.utc)
+        else:
+            reference = reference.astimezone(timezone.utc)
+    week_start = reference - timedelta(days=reference.weekday())
+    week_start = week_start.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_end = week_start + timedelta(days=7)
+    return week_start.isoformat(), week_end.isoformat()
+
+def sanitize_quiz_for_student(quiz: dict, include_answers: bool = False) -> dict:
+    """Remove sensitive fields from quiz when sending to students."""
+    if not quiz:
+        return {}
+    sanitized = {k: v for k, v in quiz.items() if k != "_id"}
+    sanitized_questions = []
+    for question in quiz.get("questions", []):
+        question_data = {
+            "id": question.get("id"),
+            "prompt": question.get("prompt"),
+            "options": question.get("options", []),
+            "word_id": question.get("word_id")
+        }
+        if include_answers:
+            question_data["correct_option_index"] = question.get("correct_option_index")
+        sanitized_questions.append(question_data)
+    sanitized["questions"] = sanitized_questions
+    return sanitized
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> dict:
     """Get current user WITHOUT password field for security"""
@@ -547,12 +746,29 @@ async def create_user(user_create: UserCreate, current_user: dict = Depends(requ
     existing_user = await db.users.find_one({"username": user_create.username})
     if existing_user:
         raise HTTPException(status_code=400, detail="Username already exists")
+
+    institution_name = None
+    if user_create.institution_id:
+        institution = await db.institutions.find_one({"id": user_create.institution_id})
+        if not institution:
+            raise HTTPException(status_code=404, detail="Kurum bulunamadı.")
+        if user_create.role == "teacher":
+            teacher_count = await db.users.count_documents({"role": "teacher", "institution_id": user_create.institution_id})
+            if teacher_count >= institution.get("teacher_limit", 5):
+                raise HTTPException(status_code=400, detail="Bu kurum için öğretmen kotası dolu.")
+        if user_create.role == "student":
+            student_count = await db.users.count_documents({"role": "student", "institution_id": user_create.institution_id})
+            if student_count >= institution.get("student_limit", 100):
+                raise HTTPException(status_code=400, detail="Bu kurum için öğrenci kotası dolu.")
+        institution_name = institution.get("name")
     
     user = User(
         username=user_create.username,
         password=hash_password(user_create.password),
         role=user_create.role,
-        class_name=user_create.class_name
+        class_name=user_create.class_name,
+        institution_id=user_create.institution_id,
+        institution_name=institution_name
     )
     await db.users.insert_one(user.model_dump())
     
@@ -587,6 +803,9 @@ async def create_word(word_create: WordCreate, current_user: dict = Depends(requ
         turkish=word_create.turkish,
         difficulty=word_create.difficulty,
         category=word_create.category,
+        synonyms=word_create.synonyms,
+        antonyms=word_create.antonyms,
+        example_sentences=word_create.example_sentences,
         created_by=current_user["username"]
     )
     await db.words.insert_one(word.model_dump())
@@ -812,6 +1031,8 @@ async def bulk_upload_words(upload: BulkWordsUpload, current_user: dict = Depend
                 turkish=word_data.get("turkish", ""),
                 difficulty=word_data.get("difficulty", 1),
                 category=word_data.get("category", "general"),
+                synonyms=word_data.get("synonyms", []),
+                antonyms=word_data.get("antonyms", []),
                 example_sentences=examples,
                 created_by=current_user["username"]
             )
@@ -1211,7 +1432,226 @@ async def get_season_standings(current_user: dict = Depends(get_current_user)):
     
     return {"standings": standings}
 
+# ============= WEEKLY QUIZ =============
+
+async def create_weekly_quiz(week_start: str, week_end: str) -> dict:
+    all_words = await db.words.find({}, {"_id": 0}).to_list(500)
+    if len(all_words) < 4:
+        raise ValueError("Quiz oluşturmak için yeterli kelime yok. Lütfen kelime listesine yeni içerikler ekleyin.")
+    
+    question_pool_size = min(8, len(all_words))
+    question_words = random.sample(all_words, question_pool_size)
+    questions: List[WeeklyQuizQuestion] = []
+    
+    for word in question_words:
+        other_options = [w["turkish"] for w in all_words if w["id"] != word["id"]]
+        distractor_count = min(3, len(other_options))
+        distractors = random.sample(other_options, distractor_count) if distractor_count > 0 else []
+        
+        options = distractors + [word["turkish"]]
+        random.shuffle(options)
+        correct_index = options.index(word["turkish"])
+        
+        questions.append(
+            WeeklyQuizQuestion(
+                prompt=f'"{word["english"]}" kelimesinin Türkçe karşılığı nedir?',
+                options=options,
+                correct_option_index=correct_index,
+                word_id=word.get("id")
+            )
+        )
+    
+    quiz = WeeklyQuiz(
+        week_start=week_start,
+        week_end=week_end,
+        questions=questions
+    )
+    quiz_data = quiz.model_dump()
+    await db.weekly_quizzes.insert_one(quiz_data)
+    return quiz_data
+
+@api_router.get("/quizzes/weekly")
+async def get_weekly_quiz(current_user: dict = Depends(get_current_user)):
+    week_start, week_end = get_week_range()
+    quiz = await db.weekly_quizzes.find_one({"week_start": week_start})
+    if not quiz:
+        try:
+            quiz = await create_weekly_quiz(week_start, week_end)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+    
+    result = await db.weekly_quiz_results.find_one(
+        {"quiz_id": quiz["id"], "user_id": current_user["id"]},
+        {"_id": 0}
+    )
+    
+    sanitized_quiz = sanitize_quiz_for_student(quiz, include_answers=result is not None)
+    
+    return {
+        "quiz": sanitized_quiz,
+        "completed": result is not None,
+        "result": result
+    }
+
+@api_router.post("/quizzes/weekly/submit")
+async def submit_weekly_quiz(submission: WeeklyQuizSubmission, current_user: dict = Depends(get_current_user)):
+    quiz = await db.weekly_quizzes.find_one({"id": submission.quiz_id})
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Quiz bulunamadı")
+    
+    existing_result = await db.weekly_quiz_results.find_one({
+        "quiz_id": submission.quiz_id,
+        "user_id": current_user["id"]
+    })
+    if existing_result:
+        raise HTTPException(status_code=400, detail="Bu haftaki quiz zaten tamamlandı")
+    
+    question_map = {q["id"]: q for q in quiz.get("questions", [])}
+    if not question_map:
+        raise HTTPException(status_code=400, detail="Quiz soruları eksik")
+    
+    evaluated_answers = []
+    correct_count = 0
+    
+    for answer in submission.answers:
+        question_id = answer.get("question_id")
+        selected_option = answer.get("selected_option")
+        if question_id not in question_map or selected_option is None:
+            continue
+        
+        question = question_map[question_id]
+        is_correct = selected_option == question.get("correct_option_index")
+        if is_correct:
+            correct_count += 1
+        
+        evaluated_answers.append({
+            "question_id": question_id,
+            "selected_option": selected_option,
+            "correct_option_index": question.get("correct_option_index"),
+            "is_correct": is_correct
+        })
+    
+    total_questions = len(question_map)
+    if len(evaluated_answers) != total_questions:
+        raise HTTPException(status_code=400, detail="Lütfen tüm soruları yanıtlayın")
+    
+    score = int(round((correct_count / total_questions) * 100)) if total_questions else 0
+    
+    result = WeeklyQuizResult(
+        quiz_id=quiz["id"],
+        user_id=current_user["id"],
+        username=current_user.get("username", ""),
+        score=score,
+        total_questions=total_questions,
+        correct_answers=correct_count,
+        answers=evaluated_answers
+    )
+    
+    result_data = result.model_dump()
+    await db.weekly_quiz_results.insert_one(result_data)
+    
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {
+            "$set": {"last_activity": datetime.now(timezone.utc).isoformat()},
+            "$inc": {"points": correct_count * 5}
+        }
+    )
+    
+    sanitized_quiz = sanitize_quiz_for_student(quiz, include_answers=True)
+    
+    return {
+        "message": "Quiz sonuçların kaydedildi",
+        "score": score,
+        "correct_answers": correct_count,
+        "total_questions": total_questions,
+        "quiz": sanitized_quiz,
+        "result": {k: v for k, v in result_data.items() if k != "_id"}
+    }
+
 # ============= TEACHER PANEL =============
+
+@api_router.post("/teacher/classes")
+async def create_teacher_class(
+    class_data: ClassCreate,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    name = class_data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Sınıf adı boş olamaz.")
+
+    existing_class = await db.classes.find_one({"name": name})
+    if existing_class:
+        raise HTTPException(status_code=400, detail="Bu sınıf adı zaten kullanılıyor.")
+
+    classroom = Classroom(
+        name=name,
+        description=class_data.description.strip() if class_data.description else None,
+        created_by=current_user["id"]
+    )
+    await db.classes.insert_one(classroom.model_dump())
+
+    class_payload = classroom.model_dump()
+    class_payload.pop("created_by", None)
+    class_payload["student_count"] = 0
+
+    return {"message": "Sınıf oluşturuldu.", "class": class_payload}
+
+
+@api_router.get("/teacher/classes")
+async def get_teacher_classes(current_user: dict = Depends(require_role("teacher", "admin"))):
+
+    classes_cursor = db.classes.find({}, {"_id": 0})
+    classes: List[dict] = []
+    async for classroom in classes_cursor:
+        class_copy = classroom.copy()
+        class_copy.pop("created_by", None)
+        student_count = await db.users.count_documents({
+            "role": "student",
+            "class_name": classroom.get("name")
+        })
+        class_copy["student_count"] = student_count
+        classes.append(class_copy)
+
+    classes.sort(key=lambda cls: cls.get("name", "").lower())
+    return classes
+
+
+@api_router.post("/teacher/students")
+async def create_teacher_student(
+    student_data: TeacherStudentCreate,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    username = student_data.username.strip()
+    if not username:
+        raise HTTPException(status_code=400, detail="Öğrenci kullanıcı adı boş olamaz.")
+
+    if len(student_data.password) < 6:
+        raise HTTPException(status_code=400, detail="Şifre en az 6 karakter olmalıdır.")
+
+    existing_user = await db.users.find_one({"username": username})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten kullanılıyor.")
+
+    class_name = student_data.class_name.strip() if student_data.class_name else None
+    if class_name:
+        existing_class = await db.classes.find_one({"name": class_name})
+        if not existing_class:
+            raise HTTPException(status_code=404, detail="Sınıf bulunamadı.")
+
+    user = User(
+        username=username,
+        password=hash_password(student_data.password),
+        role="student",
+        class_name=class_name
+    )
+    await db.users.insert_one(user.model_dump())
+
+    student_payload = user.model_dump()
+    student_payload.pop("password", None)
+
+    return {"message": "Öğrenci oluşturuldu.", "student": student_payload}
+
 
 @api_router.get("/teacher/students")
 async def get_teacher_students(current_user: dict = Depends(require_role("teacher", "admin"))):
@@ -1222,6 +1662,97 @@ async def get_teacher_students(current_user: dict = Depends(require_role("teache
     ).to_list(1000)
     
     return students
+
+
+@api_router.get("/teacher/words")
+async def get_teacher_words(current_user: dict = Depends(require_role("teacher", "admin"))):
+    query = {
+        "$or": [
+            {"approved": True},
+            {"approved": {"$exists": False}},
+            {"created_by": current_user["username"]}
+        ]
+    }
+    words = await db.words.find(query, {"_id": 0}).sort("english", 1).to_list(1000)
+    for word in words:
+        if "approved" not in word:
+            word["approved"] = True
+    return words
+
+@api_router.post("/teacher/words")
+async def create_teacher_word(
+    word_create: WordCreate,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    english = word_create.english.strip()
+    turkish = word_create.turkish.strip()
+    if not english or not turkish:
+        raise HTTPException(status_code=400, detail="Kelime ve anlamı boş olamaz.")
+
+    existing = await db.words.find_one({"english": english})
+    if existing:
+        raise HTTPException(status_code=400, detail="Bu kelime zaten eklenmiş.")
+
+    word = Word(
+        english=english,
+        turkish=turkish,
+        difficulty=word_create.difficulty,
+        category=word_create.category or "general",
+        created_by=current_user["username"],
+        approved=current_user.get("role") == "admin"
+    )
+    await db.words.insert_one(word.model_dump())
+    payload = word.model_dump()
+    payload.pop("_id", None)
+    return {"message": "Kelime başarıyla eklendi.", "word": payload}
+
+
+@api_router.put("/teacher/words/{word_id}")
+async def update_teacher_word(
+    word_id: str,
+    word_update: WordCreate,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    update_data = {
+        "english": word_update.english.strip(),
+        "turkish": word_update.turkish.strip(),
+        "difficulty": word_update.difficulty,
+        "category": word_update.category or "general"
+    }
+
+    if not update_data["english"] or not update_data["turkish"]:
+        raise HTTPException(status_code=400, detail="Kelime ve anlamı boş olamaz.")
+
+    existing = await db.words.find_one({"id": word_id})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Kelime bulunamadı.")
+
+    if current_user.get("role") != "admin" and existing.get("created_by") != current_user["username"]:
+        raise HTTPException(status_code=403, detail="Bu kelime üzerinde değişiklik yapma yetkiniz yok.")
+
+    if current_user.get("role") != "admin":
+        update_data["approved"] = False
+
+    await db.words.update_one(
+        {"id": word_id},
+        {"$set": update_data}
+    )
+
+    return {"message": "Kelime güncellendi."}
+
+
+@api_router.delete("/teacher/words/{word_id}")
+async def delete_teacher_word(
+    word_id: str,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    if current_user.get("role") == "admin":
+        result = await db.words.delete_one({"id": word_id})
+    else:
+        result = await db.words.delete_one({"id": word_id, "created_by": current_user["username"]})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Kelime bulunamadı veya bu kelimeyi silme izniniz yok.")
+    return {"message": "Kelime silindi."}
 
 @api_router.get("/teacher/statistics")
 async def get_teacher_statistics(current_user: dict = Depends(require_role("teacher", "admin"))):
@@ -1243,6 +1774,607 @@ async def get_teacher_statistics(current_user: dict = Depends(require_role("teac
         "total_games": total_games,
         "game_stats": game_stats
     }
+
+
+@api_router.get("/admin/system-report")
+async def get_admin_system_report(current_user: dict = Depends(require_role("admin"))):
+    now = datetime.now(timezone.utc)
+    start_of_day = datetime(now.year, now.month, now.day, tzinfo=timezone.utc)
+    start_of_week = start_of_day - timedelta(days=start_of_day.weekday())
+    active_threshold = now - timedelta(minutes=30)
+
+    start_day_iso = start_of_day.isoformat()
+    start_week_iso = start_of_week.isoformat()
+    active_iso = active_threshold.isoformat()
+
+    total_teachers = await db.users.count_documents({"role": "teacher"})
+    total_students = await db.users.count_documents({"role": "student"})
+    new_today = await db.users.count_documents({"created_at": {"$gte": start_day_iso}})
+    new_week = await db.users.count_documents({"created_at": {"$gte": start_week_iso}})
+    active_users = await db.users.count_documents({"last_activity": {"$gte": active_iso}})
+
+    total_words = await db.words.count_documents({"$or": [{"approved": True}, {"approved": {"$exists": False}}]})
+
+    popular_pipeline = [
+        {"$project": {"word_errors": {"$objectToArray": "$word_errors"}}},
+        {"$unwind": "$word_errors"},
+        {"$group": {"_id": "$word_errors.k", "count": {"$sum": "$word_errors.v"}}},
+        {"$sort": {"count": -1}},
+        {"$limit": 5}
+    ]
+    popular_words = await db.users.aggregate(popular_pipeline).to_list(5)
+    if not popular_words:
+        sample_words = await db.words.find({}, {"_id": 0, "english": 1, "turkish": 1}).limit(5).to_list(5)
+        popular_words = [{"_id": w["english"], "count": 0, "turkish": w.get("turkish")} for w in sample_words]
+    else:
+        word_map = {w["english"]: w for w in await db.words.find({}, {"_id": 0, "english": 1, "turkish": 1}).to_list(1000)}
+        for item in popular_words:
+            word_info = word_map.get(item["_id"])
+            if word_info:
+                item["turkish"] = word_info.get("turkish")
+
+    games_window = now - timedelta(days=6)
+    scores = await db.game_scores.find({"created_at": {"$gte": games_window.isoformat()}}, {"_id": 0, "created_at": 1}).to_list(5000)
+    daily_games_map: Dict[str, int] = defaultdict(int)
+    for score in scores:
+        created_at = score.get("created_at")
+        if created_at:
+            try:
+                date_key = datetime.fromisoformat(created_at.replace("Z", "+00:00")).date().isoformat()
+            except Exception:
+                date_key = created_at[:10]
+            daily_games_map[date_key] += 1
+    daily_games = []
+    for i in range(7):
+        day = (games_window + timedelta(days=i)).date().isoformat()
+        daily_games.append({"date": day, "count": daily_games_map.get(day, 0)})
+
+    league = await db.leagues.find_one(sort=[("year", -1), ("week_number", -1)])
+    top_league = []
+    if league:
+        top_league = league.get("standings", [])[:5]
+
+    report = {
+        "generated_at": now.isoformat(),
+        "users": {
+            "total_teachers": total_teachers,
+            "total_students": total_students,
+            "new_today": new_today,
+            "new_this_week": new_week,
+            "active_now": active_users
+        },
+        "content": {
+            "total_words": total_words,
+            "popular_words": popular_words
+        },
+        "activity": {
+            "daily_games": daily_games,
+            "league_top": top_league
+        }
+    }
+    return report
+
+
+@api_router.post("/admin/institutions")
+async def create_institution(
+    institution_data: InstitutionCreate,
+    current_user: dict = Depends(require_role("admin"))
+):
+    name = institution_data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Kurum adı boş olamaz.")
+
+    existing = await db.institutions.find_one({"name": name})
+    if existing:
+        raise HTTPException(status_code=400, detail="Bu isimde bir kurum zaten mevcut.")
+
+    institution = Institution(
+        name=name,
+        description=institution_data.description,
+        teacher_limit=max(1, institution_data.teacher_limit),
+        student_limit=max(1, institution_data.student_limit)
+    )
+    await db.institutions.insert_one(institution.model_dump())
+    payload = institution.model_dump()
+    payload.pop("_id", None)
+    return {"message": "Kurum oluşturuldu.", "institution": payload}
+
+
+@api_router.get("/admin/institutions")
+async def get_institutions(current_user: dict = Depends(require_role("admin"))):
+    institutions = await db.institutions.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    response = []
+    for inst in institutions:
+        inst_id = inst["id"]
+        teacher_count = await db.users.count_documents({"role": "teacher", "institution_id": inst_id})
+        student_count = await db.users.count_documents({"role": "student", "institution_id": inst_id})
+        classes = await db.classes.find({"institution_id": inst_id}, {"_id": 0}).sort("name", 1).to_list(200)
+        response.append({
+            **inst,
+            "teacher_count": teacher_count,
+            "student_count": student_count,
+            "class_count": len(classes),
+            "classes": classes
+        })
+    return {"institutions": response}
+
+
+@api_router.post("/admin/institutions/{institution_id}/assign-teacher")
+async def assign_teacher_to_institution(
+    institution_id: str,
+    assignment: AssignTeacherRequest,
+    current_user: dict = Depends(require_role("admin"))
+):
+    institution = await db.institutions.find_one({"id": institution_id})
+    if not institution:
+        raise HTTPException(status_code=404, detail="Kurum bulunamadı.")
+
+    teacher = await db.users.find_one({"id": assignment.teacher_id})
+    if not teacher or teacher.get("role") != "teacher":
+        raise HTTPException(status_code=404, detail="Öğretmen bulunamadı.")
+
+    teacher_count = await db.users.count_documents({"role": "teacher", "institution_id": institution_id})
+    if teacher_count >= institution.get("teacher_limit", 5):
+        raise HTTPException(status_code=400, detail="Bu kurum için öğretmen kotası dolu.")
+
+    await db.users.update_one(
+        {"id": assignment.teacher_id},
+        {"$set": {"institution_id": institution_id, "institution_name": institution.get("name")}}
+    )
+
+    return {"message": f"{teacher['username']} kullanıcısı {institution['name']} kurumuna atandı."}
+
+
+@api_router.post("/admin/institutions/{institution_id}/classes")
+async def create_institution_class(
+    institution_id: str,
+    class_data: ClassCreate,
+    current_user: dict = Depends(require_role("admin"))
+):
+    institution = await db.institutions.find_one({"id": institution_id})
+    if not institution:
+        raise HTTPException(status_code=404, detail="Kurum bulunamadı.")
+
+    teacher = None
+    if class_data.teacher_id:
+        teacher = await db.users.find_one({"id": class_data.teacher_id})
+        if not teacher or teacher.get("role") != "teacher":
+            raise HTTPException(status_code=404, detail="Atanacak öğretmen bulunamadı.")
+        if teacher.get("institution_id") not in (None, institution_id):
+            raise HTTPException(status_code=400, detail="Öğretmen farklı bir kurumda kayıtlı.")
+        if teacher.get("institution_id") != institution_id:
+            await db.users.update_one(
+                {"id": teacher["id"]},
+                {"$set": {"institution_id": institution_id, "institution_name": institution["name"]}}
+            )
+
+    classroom = Classroom(
+        name=class_data.name,
+        description=class_data.description,
+        created_by=current_user["username"],
+        institution_id=institution_id,
+        institution_name=institution.get("name"),
+        teacher_id=teacher.get("id") if teacher else None,
+        teacher_name=teacher.get("username") if teacher else None
+    )
+    await db.classes.insert_one(classroom.model_dump())
+    payload = classroom.model_dump()
+    payload.pop("_id", None)
+    return {"message": "Sınıf oluşturuldu.", "class": payload}
+
+
+@api_router.get("/admin/master-words")
+async def get_master_words(current_user: dict = Depends(require_role("admin"))):
+    pending_words = await db.words.find({"approved": False}, {"_id": 0}).sort("created_at", 1).to_list(500)
+    approved_count = await db.words.count_documents({"$or": [{"approved": True}, {"approved": {"$exists": False}}]})
+    word_packs = await db.word_packs.find({}, {"_id": 0}).sort("name", 1).to_list(200)
+    settings = await get_system_settings()
+    return {
+        "pending_words": pending_words,
+        "approved_count": approved_count,
+        "word_packs": word_packs,
+        "categories": settings.get("categories", [])
+    }
+
+
+@api_router.post("/admin/words/{word_id}/approve")
+async def approve_word(word_id: str, current_user: dict = Depends(require_role("admin"))):
+    result = await db.words.update_one({"id": word_id}, {"$set": {"approved": True}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Kelime bulunamadı.")
+    return {"message": "Kelime onaylandı."}
+
+
+@api_router.post("/admin/word-packs")
+async def create_word_pack(
+    pack_data: WordPackCreate,
+    current_user: dict = Depends(require_role("admin"))
+):
+    name = pack_data.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Paket adı boş olamaz.")
+
+    existing = await db.word_packs.find_one({"name": name})
+    if existing:
+        raise HTTPException(status_code=400, detail="Bu adla bir kelime paketi zaten mevcut.")
+
+    words_input = [w.strip() for w in pack_data.words if w.strip()]
+    if words_input:
+        approved_words = await db.words.find(
+            {
+                "english": {"$in": words_input},
+                "$or": [{"approved": True}, {"approved": {"$exists": False}}]
+            },
+            {"_id": 0, "english": 1}
+        ).to_list(len(words_input))
+        approved_set = {w["english"] for w in approved_words}
+        missing = [w for w in words_input if w not in approved_set]
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Şu kelimeler bulunamadı veya onaylı değil: {', '.join(missing)}")
+
+    word_pack = WordPack(
+        name=name,
+        description=pack_data.description,
+        level=pack_data.level,
+        words=words_input
+    )
+    await db.word_packs.insert_one(word_pack.model_dump())
+    payload = word_pack.model_dump()
+    payload.pop("_id", None)
+    return {"message": "Kelime paketi oluşturuldu.", "word_pack": payload}
+
+
+@api_router.get("/admin/system-settings")
+async def read_system_settings(current_user: dict = Depends(require_role("admin"))):
+    settings = await get_system_settings()
+    settings_copy = settings.copy()
+    settings_copy.pop("_id", None)
+    return settings_copy
+
+
+@api_router.put("/admin/system-settings")
+async def update_system_settings(
+    update: SystemSettingsUpdate,
+    current_user: dict = Depends(require_role("admin"))
+):
+    settings = await get_system_settings()
+    update_data = {}
+
+    if update.maintenance_mode is not None:
+        update_data["maintenance_mode"] = update.maintenance_mode
+    if update.feature_flags is not None:
+        merged_flags = settings.get("feature_flags", {}).copy()
+        merged_flags.update(update.feature_flags)
+        update_data["feature_flags"] = merged_flags
+    if update.email is not None:
+        merged_email = settings.get("email", {}).copy()
+        merged_email.update(update.email)
+        update_data["email"] = merged_email
+    if update.api_keys is not None:
+        merged_keys = settings.get("api_keys", {}).copy()
+        merged_keys.update(update.api_keys)
+        update_data["api_keys"] = merged_keys
+    if update.categories is not None:
+        update_data["categories"] = sorted(set(update.categories))
+
+    if update_data:
+        await db.system_settings.update_one(
+            {"_id": SYSTEM_SETTINGS_ID},
+            {"$set": update_data},
+            upsert=True
+        )
+
+    new_settings = await get_system_settings()
+    new_settings.pop("_id", None)
+    return {"message": "Ayarlar güncellendi.", "settings": new_settings}
+@api_router.get("/teacher/students/summary")
+async def get_teacher_student_summary(current_user: dict = Depends(require_role("teacher", "admin"))):
+    
+    summaries = []
+    students_cursor = db.users.find(
+        {"role": "student"},
+        {"_id": 0, "password": 0}
+    )
+    
+    async for student in students_cursor:
+        quiz_results = await db.weekly_quiz_results.find(
+            {"user_id": student["id"]},
+            {"_id": 0}
+        ).sort("submitted_at", -1).to_list(20)
+        
+        completion_count = len(quiz_results)
+        average_score = None
+        best_score = None
+        last_quiz = quiz_results[0] if quiz_results else None
+        
+        if quiz_results:
+            total_score = sum(res.get("score", 0) for res in quiz_results)
+            average_score = total_score / completion_count if completion_count else None
+            best_score = max(res.get("score", 0) for res in quiz_results)
+        
+        summaries.append({
+            "id": student["id"],
+            "username": student["username"],
+            "class_name": student.get("class_name"),
+            "points": student.get("points", 0),
+            "words_learned": student.get("words_learned", 0),
+            "games_played": student.get("games_played", 0),
+            "streak": student.get("streak", 0),
+            "last_login_date": student.get("last_login_date"),
+            "average_quiz_score": round(average_score, 1) if average_score is not None else None,
+            "best_quiz_score": best_score,
+            "last_quiz_score": last_quiz.get("score") if last_quiz else None,
+            "last_quiz_submitted_at": last_quiz.get("submitted_at") if last_quiz else None,
+            "weekly_quiz_completion_count": completion_count
+        })
+    
+    summaries.sort(
+        key=lambda s: (s["average_quiz_score"] is None, -(s["average_quiz_score"] or 0))
+    )
+    
+    return {"students": summaries}
+
+def _parse_iso_datetime(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, dict) and "$date" in value:
+            value = value["$date"]
+        if isinstance(value, (int, float)):
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        if isinstance(value, str) and value.endswith("Z"):
+            value = value.replace("Z", "+00:00")
+        return datetime.fromisoformat(value)
+    except Exception:
+        return None
+
+@api_router.get("/teacher/students/{student_id}/profile")
+async def get_teacher_student_profile(student_id: str, current_user: dict = Depends(require_role("teacher", "admin"))):
+    student = await db.users.find_one({"id": student_id, "role": "student"}, {"_id": 0, "password": 0})
+    if not student:
+        raise HTTPException(status_code=404, detail="Öğrenci bulunamadı")
+
+    quiz_history = await db.weekly_quiz_results.find(
+        {"user_id": student_id},
+        {"_id": 0}
+    ).sort("submitted_at", -1).to_list(20)
+
+    game_history = await db.game_scores.find(
+        {"user_id": student_id},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(50)
+
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=29)
+
+    daily_activity_map: Dict[str, Dict[str, int]] = {}
+
+    for score in game_history:
+        activity_date = _parse_iso_datetime(score.get("created_at"))
+        if not activity_date:
+            continue
+        activity_key = activity_date.date().isoformat()
+        if activity_date.date() < start_date or activity_date.date() > today:
+            continue
+        if activity_key not in daily_activity_map:
+            daily_activity_map[activity_key] = {"games_played": 0, "correct_answers": 0}
+        daily_activity_map[activity_key]["games_played"] += 1
+        daily_activity_map[activity_key]["correct_answers"] += score.get("correct_answers", 0)
+
+    for quiz in quiz_history:
+        activity_date = _parse_iso_datetime(quiz.get("submitted_at"))
+        if not activity_date:
+            continue
+        activity_key = activity_date.date().isoformat()
+        if activity_date.date() < start_date or activity_date.date() > today:
+            continue
+        if activity_key not in daily_activity_map:
+            daily_activity_map[activity_key] = {"games_played": 0, "correct_answers": 0}
+        daily_activity_map[activity_key]["quizzes_completed"] = daily_activity_map[activity_key].get("quizzes_completed", 0) + 1
+
+    daily_activity = []
+    for day_index in range(30):
+        day = start_date + timedelta(days=day_index)
+        key = day.isoformat()
+        metrics = daily_activity_map.get(key, {})
+        daily_activity.append({
+            "date": key,
+            "games_played": metrics.get("games_played", 0),
+            "correct_answers": metrics.get("correct_answers", 0),
+            "quizzes_completed": metrics.get("quizzes_completed", 0)
+        })
+
+    level = student.get("level") or 1
+    points = student.get("points", 0)
+    progress_to_next = points % 100
+
+    return {
+        "student": student,
+        "quiz_history": quiz_history,
+        "game_history": game_history,
+        "daily_activity": daily_activity,
+        "level_summary": {
+            "level": level,
+            "points": points,
+            "progress_percent": progress_to_next,
+            "points_to_next": max(0, 100 - progress_to_next)
+        }
+    }
+
+@api_router.get("/teacher/statistics/class-activity")
+async def get_teacher_class_activity(
+    days: int = 30,
+    class_name: Optional[str] = None,
+    current_user: dict = Depends(require_role("teacher", "admin"))
+):
+    days = min(max(days, 1), 120)
+    today = datetime.now(timezone.utc).date()
+    start_date = today - timedelta(days=days - 1)
+
+    date_filter_start = datetime.combine(start_date, datetime.min.time(), tzinfo=timezone.utc).isoformat()
+    date_filter_end = datetime.combine(today, datetime.max.time(), tzinfo=timezone.utc).isoformat()
+
+    activity_map: Dict[str, set] = defaultdict(set)
+    class_student_ids: Optional[set[str]] = None
+
+    if class_name:
+        class_students_cursor = db.users.find(
+            {"role": "student", "class_name": class_name},
+            {"_id": 0, "id": 1}
+        )
+        class_student_ids = set()
+        async for student in class_students_cursor:
+            class_student_ids.add(student["id"])
+
+        if not class_student_ids:
+            return {
+                "heatmap": []
+            }
+
+    game_scores = await db.game_scores.find(
+        {"created_at": {"$gte": date_filter_start, "$lte": date_filter_end}},
+        {"_id": 0, "user_id": 1, "created_at": 1}
+    ).to_list(5000)
+
+    for score in game_scores:
+        created_at = _parse_iso_datetime(score.get("created_at"))
+        if not created_at:
+            continue
+        user_id = score.get("user_id")
+        if class_student_ids is not None and user_id not in class_student_ids:
+            continue
+        activity_map[created_at.date().isoformat()].add(user_id)
+
+    quiz_results = await db.weekly_quiz_results.find(
+        {"submitted_at": {"$gte": date_filter_start, "$lte": date_filter_end}},
+        {"_id": 0, "user_id": 1, "submitted_at": 1}
+    ).to_list(5000)
+
+    for result in quiz_results:
+        submitted_at = _parse_iso_datetime(result.get("submitted_at"))
+        if not submitted_at:
+            continue
+        user_id = result.get("user_id")
+        if class_student_ids is not None and user_id not in class_student_ids:
+            continue
+        activity_map[submitted_at.date().isoformat()].add(user_id)
+
+    if class_student_ids is not None:
+        total_students = len(class_student_ids)
+    else:
+        total_students = await db.users.count_documents({"role": "student"})
+
+    heatmap = []
+    for offset in range(days):
+        day = start_date + timedelta(days=offset)
+        students_active = len(activity_map.get(day.isoformat(), set()))
+        percent_active = round((students_active / total_students) * 100, 1) if total_students else 0
+        heatmap.append({
+            "date": day.isoformat(),
+            "active_students": students_active,
+            "percent_active": percent_active
+        })
+
+    return {"heatmap": heatmap, "total_students": total_students}
+
+@api_router.get("/teacher/dashboard/actions")
+async def get_teacher_dashboard_actions(current_user: dict = Depends(require_role("teacher", "admin"))):
+    now = datetime.now(timezone.utc)
+    struggling_cutoff = now - timedelta(days=1)
+    inactive_cutoff = now - timedelta(days=3)
+
+    recent_results = await db.weekly_quiz_results.find(
+        {"submitted_at": {"$gte": struggling_cutoff.isoformat()}},
+        {"_id": 0}
+    ).to_list(1000)
+
+    struggling_ids = set()
+    for result in recent_results:
+        total_questions = result.get("total_questions") or 0
+        correct_answers = result.get("correct_answers") or 0
+        accuracy = (correct_answers / total_questions) if total_questions else 0
+        if accuracy < 0.5:
+            struggling_ids.add(result["user_id"])
+
+    inactive_students_cursor = db.users.find(
+        {
+            "role": "student",
+            "$or": [
+                {"last_login_date": {"$lt": inactive_cutoff.isoformat()}},
+                {"last_login_date": {"$exists": False}}
+            ]
+        },
+        {"_id": 0, "id": 1, "username": 1, "last_login_date": 1}
+    )
+    inactive_students = []
+    async for student in inactive_students_cursor:
+        inactive_students.append(student)
+
+    struggling_students = []
+    if struggling_ids:
+        struggling_students = await db.users.find(
+            {"id": {"$in": list(struggling_ids)}},
+            {"_id": 0, "id": 1, "username": 1}
+        ).to_list(len(struggling_ids))
+
+    word_error_aggregate: Dict[str, int] = defaultdict(int)
+    students_cursor = db.users.find({"role": "student"}, {"_id": 0, "word_errors": 1})
+    async for student in students_cursor:
+        for word, count in (student.get("word_errors") or {}).items():
+            word_error_aggregate[word] += count
+
+    challenging_words = sorted(
+        [{"word": word, "count": count} for word, count in word_error_aggregate.items()],
+        key=lambda item: item["count"],
+        reverse=True
+    )[:5]
+
+    return {
+        "struggling_students": struggling_students,
+        "inactive_students": inactive_students,
+        "challenging_words": challenging_words
+    }
+
+@api_router.post("/teacher/assignments")
+async def create_word_assignment(assignment: WordAssignmentCreate, current_user: dict = Depends(require_role("teacher", "admin"))):
+    if not assignment.word_ids:
+        raise HTTPException(status_code=400, detail="Atanacak kelime seçilmedi")
+
+    assigned_to_name = assignment.assigned_to_id
+
+    if assignment.assigned_to_type == "student":
+        target = await db.users.find_one({"id": assignment.assigned_to_id, "role": "student"}, {"_id": 0, "username": 1})
+        if not target:
+            raise HTTPException(status_code=404, detail="Öğrenci bulunamadı")
+        assigned_to_name = target["username"]
+    elif assignment.assigned_to_type == "class":
+        target_exists = await db.users.count_documents({"role": "student", "class_name": assignment.assigned_to_id})
+        if target_exists == 0:
+            raise HTTPException(status_code=404, detail="Bu sınıf için öğrenci bulunamadı")
+    else:
+        raise HTTPException(status_code=400, detail="Geçersiz hedef tipi")
+
+    teacher_name = current_user.get("username", "Öğretmen")
+    word_assignment = WordAssignment(
+        assigned_by=current_user["id"],
+        assigned_by_name=teacher_name,
+        assigned_to_id=assignment.assigned_to_id,
+        assigned_to_name=assigned_to_name,
+        assigned_to_type=assignment.assigned_to_type,
+        word_ids=assignment.word_ids,
+        due_date=assignment.due_date
+    )
+
+    await db.word_assignments.insert_one(word_assignment.model_dump())
+
+    return {"message": "Ödev başarıyla oluşturuldu", "assignment": word_assignment.model_dump()}
+
+@api_router.get("/teacher/assignments")
+async def list_word_assignments(current_user: dict = Depends(require_role("teacher", "admin"))):
+    assignments = await db.word_assignments.find({"assigned_by": current_user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return {"assignments": assignments}
 
 # ============= PERSONALIZED LEARNING PLAN =============
 
@@ -1765,6 +2897,10 @@ async def get_user_profile(current_user: dict = Depends(get_current_user)):
 # Update game scores to award XP
 @api_router.post("/games/scores", response_model=GameScore)
 async def create_game_score_with_xp(score_create: GameScoreCreate, current_user: dict = Depends(get_current_user)):
+    # Check if user is teacher or admin - don't save scores or update points for them
+    user_role = current_user.get("role")
+    is_teacher_or_admin = user_role in ["teacher", "admin"]
+    
     game_score = GameScore(
         user_id=current_user["id"],
         username=current_user["username"],
@@ -1774,67 +2910,71 @@ async def create_game_score_with_xp(score_create: GameScoreCreate, current_user:
         wrong_answers=score_create.wrong_answers,
         completed=score_create.completed
     )
-    await db.game_scores.insert_one(game_score.model_dump())
     
-    # Update user stats with XP
-    now = datetime.now(timezone.utc)
-    today = now.date()
+    # Only save score to database if user is a student
+    if not is_teacher_or_admin:
+        await db.game_scores.insert_one(game_score.model_dump())
     
-    user = await db.users.find_one({"id": current_user["id"]})
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    # Calculate XP (10 XP per correct answer, bonus for perfect games)
-    xp_earned = score_create.correct_answers * 10
-    if score_create.wrong_answers == 0 and score_create.correct_answers > 0:
-        xp_earned += 50  # Perfect game bonus
-    
-    new_xp = user.get("xp", 0) + xp_earned
-    new_level = calculate_xp_from_level(new_xp)
-    
-    # Daily progress
-    last_reset = user.get("last_daily_reset")
-    daily_progress = user.get("daily_words_progress", 0)
-    
-    if last_reset:
-        try:
-            reset_date = datetime.fromisoformat(last_reset.replace('Z', '+00:00')).date()
-            if reset_date < today:
-                daily_progress = 0
-        except:
-            pass
-    
-    new_daily_progress = daily_progress + score_create.correct_answers
-    daily_target = user.get("daily_words_target", 5)
-    bonus_points = 0
-    if new_daily_progress >= daily_target and daily_progress < daily_target:
-        bonus_points = 20
-        xp_earned += 30  # Daily goal bonus XP
-    
-    update_data = {
-        "$inc": {
-            "points": score_create.score + bonus_points,
-            "games_played": 1,
-            "words_learned": score_create.correct_answers,
-            "xp": xp_earned
-        },
-        "$set": {
-            "last_activity": now.isoformat(),
-            "daily_words_progress": new_daily_progress,
-            "level": new_level
+    # Only update user stats with XP if user is a student
+    if not is_teacher_or_admin:
+        now = datetime.now(timezone.utc)
+        today = now.date()
+        
+        user = await db.users.find_one({"id": current_user["id"]})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        # Calculate XP (10 XP per correct answer, bonus for perfect games)
+        xp_earned = score_create.correct_answers * 10
+        if score_create.wrong_answers == 0 and score_create.correct_answers > 0:
+            xp_earned += 50  # Perfect game bonus
+        
+        new_xp = user.get("xp", 0) + xp_earned
+        new_level = calculate_xp_from_level(new_xp)
+        
+        # Daily progress
+        last_reset = user.get("last_daily_reset")
+        daily_progress = user.get("daily_words_progress", 0)
+        
+        if last_reset:
+            try:
+                reset_date = datetime.fromisoformat(last_reset.replace('Z', '+00:00')).date()
+                if reset_date < today:
+                    daily_progress = 0
+            except:
+                pass
+        
+        new_daily_progress = daily_progress + score_create.correct_answers
+        daily_target = user.get("daily_words_target", 5)
+        bonus_points = 0
+        if new_daily_progress >= daily_target and daily_progress < daily_target:
+            bonus_points = 20
+            xp_earned += 30  # Daily goal bonus XP
+        
+        update_data = {
+            "$inc": {
+                "points": score_create.score + bonus_points,
+                "games_played": 1,
+                "words_learned": score_create.correct_answers,
+                "xp": xp_earned
+            },
+            "$set": {
+                "last_activity": now.isoformat(),
+                "daily_words_progress": new_daily_progress,
+                "level": new_level
+            }
         }
-    }
-    
-    if not last_reset or (last_reset and datetime.fromisoformat(last_reset.replace('Z', '+00:00')).date() < today):
-        update_data["$set"]["last_daily_reset"] = today.isoformat()
-    
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        update_data
-    )
-    
-    # Check achievements
-    await check_achievements(current_user["id"])
+        
+        if not last_reset or (last_reset and datetime.fromisoformat(last_reset.replace('Z', '+00:00')).date() < today):
+            update_data["$set"]["last_daily_reset"] = today.isoformat()
+        
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            update_data
+        )
+        
+        # Check achievements
+        await check_achievements(current_user["id"])
     
     return game_score
 

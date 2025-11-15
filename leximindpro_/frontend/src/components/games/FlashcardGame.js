@@ -26,26 +26,30 @@ function FlashcardGame({ words, onComplete, apiUrl, token, onClose }) {
   };
 
   const handleKnow = () => {
-    setScore(score + 10);
-    setCorrectAnswers(correctAnswers + 1);
-    nextCard();
+    const updatedScore = score + 10;
+    const updatedCorrect = correctAnswers + 1;
+
+    setScore(updatedScore);
+    setCorrectAnswers(updatedCorrect);
+    nextCard(updatedScore, updatedCorrect, wrongAnswers);
   };
 
   const handleDontKnow = () => {
-    setWrongAnswers(wrongAnswers + 1);
-    nextCard();
+    const updatedWrong = wrongAnswers + 1;
+    setWrongAnswers(updatedWrong);
+    nextCard(score, correctAnswers, updatedWrong);
   };
 
-  const nextCard = () => {
+  const nextCard = (updatedScore = score, updatedCorrect = correctAnswers, updatedWrong = wrongAnswers) => {
     setIsFlipped(false);
     if (currentIndex + 1 < gameWords.length) {
       setCurrentIndex(currentIndex + 1);
     } else {
-      finishGame();
+      finishGame(updatedScore, updatedCorrect, updatedWrong);
     }
   };
 
-  const finishGame = async () => {
+  const finishGame = async (finalScore = score, finalCorrect = correctAnswers, finalWrong = wrongAnswers) => {
     try {
       await fetch(`${apiUrl}/games/scores`, {
         method: 'POST',
@@ -55,23 +59,27 @@ function FlashcardGame({ words, onComplete, apiUrl, token, onClose }) {
         },
         body: JSON.stringify({
           game_type: 'flashcard',
-          score: score + 10,
-          correct_answers: correctAnswers + 1,
-          wrong_answers: wrongAnswers
+          score: finalScore,
+          correct_answers: finalCorrect,
+          wrong_answers: finalWrong
         })
       });
-      onComplete(score + 10, correctAnswers + 1, wrongAnswers);
+      onComplete(finalScore, finalCorrect, finalWrong);
     } catch (error) {
       console.error('Error saving score:', error);
-      onComplete(score + 10, correctAnswers + 1, wrongAnswers);
+      onComplete(finalScore, finalCorrect, finalWrong);
     }
+  };
+
+  const handleExit = () => {
+    onClose(score, correctAnswers, wrongAnswers);
   };
 
   return (
     <div className="game-container flashcard-game">
       <div className="game-header">
         <div className="game-header-left">
-          <button className="back-button" onClick={onClose}>
+          <button className="back-button" onClick={handleExit}>
             ← Geri
           </button>
           <h2>🎴 Kart Oyunu</h2>

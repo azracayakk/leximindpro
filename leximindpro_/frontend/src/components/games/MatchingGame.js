@@ -73,6 +73,12 @@ function MatchingGame({ words, onComplete, apiUrl, token, onClose }) {
     setTimeout(() => setSelectedCards([]), 1000);
   };
 
+  const handleExit = () => {
+    const correctCount = matchedPairs.length;
+    const wrongCount = Math.max(moves - correctCount, 0);
+    onClose(score, correctCount, wrongCount);
+  };
+
   const finishGame = async (finalScore, correct) => {
     try {
       await fetch(`${apiUrl}/games/scores`, {
@@ -103,7 +109,7 @@ function MatchingGame({ words, onComplete, apiUrl, token, onClose }) {
     <div className="game-container matching-game">
       <div className="game-header">
         <div className="game-header-left">
-          <button className="back-button" onClick={onClose}>
+          <button className="back-button" onClick={handleExit}>
             ← Geri
           </button>
           <h2>🎯 Eşleştirme Oyunu</h2>
