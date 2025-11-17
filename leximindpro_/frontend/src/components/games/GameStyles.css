@@ -261,6 +261,27 @@
   color: #666;
 }
 
+.word-source-toggle {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.word-source-toggle button {
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid #e5e7eb;
+  background: white;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.word-source-toggle button.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border-color: transparent;
+}
+
 .options-grid {
   display: grid;
   grid-template-columns: repeat(2, 1fr);

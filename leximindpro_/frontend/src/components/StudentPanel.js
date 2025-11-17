@@ -6,6 +6,9 @@ function StudentPanel({ user, token, apiUrl }) {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [showGames, setShowGames] = useState(false);
   const [words, setWords] = useState([]);
+  const [reviewWords, setReviewWords] = useState([]);
+  const [reviewMode, setReviewMode] = useState(null); // 'initial' | 'review'
+  const [reviewLoading, setReviewLoading] = useState(false);
   const [scores, setScores] = useState([]);
   const [achievements, setAchievements] = useState([]);
   const [userAchievements, setUserAchievements] = useState([]);
@@ -20,6 +23,15 @@ function StudentPanel({ user, token, apiUrl }) {
   const [quizError, setQuizError] = useState(null);
   const [activeWordQuiz, setActiveWordQuiz] = useState(null);
   const [wordQuizFeedback, setWordQuizFeedback] = useState(null);
+  const [pronunciationFeedback, setPronunciationFeedback] = useState(null);
+  const [favorites, setFavorites] = useState([]);
+  const [hardWords, setHardWords] = useState([]);
+  const [dailyTarget, setDailyTarget] = useState(user.daily_words_target || 5);
+  const [updatingDailyTarget, setUpdatingDailyTarget] = useState(false);
+  const [storySelection, setStorySelection] = useState([]);
+  const [storyLoading, setStoryLoading] = useState(false);
+  const [storyResult, setStoryResult] = useState(null);
+  const [storyError, setStoryError] = useState(null);
 
   useEffect(() => {
     if (activeTab === 'words') {
@@ -34,6 +46,8 @@ function StudentPanel({ user, token, apiUrl }) {
       fetchLeague();
     } else if (activeTab === 'weeklyQuiz') {
       fetchWeeklyQuiz();
+    } else if (activeTab === 'review') {
+      fetchReviewWords();
     }
   }, [activeTab]);
 
@@ -53,6 +67,25 @@ function StudentPanel({ user, token, apiUrl }) {
       console.error('Error fetching words:', error);
     }
     setLoading(false);
+  };
+
+  const fetchReviewWords = async () => {
+    setReviewLoading(true);
+    try {
+      const response = await fetch(`${apiUrl}/learning/review-words`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setReviewWords(data.words || []);
+        setReviewMode(data.mode || null);
+      }
+    } catch (error) {
+      console.error('Error fetching review words:', error);
+    }
+    setReviewLoading(false);
   };
 
   const fetchScores = async () => {
@@ -244,6 +277,88 @@ function StudentPanel({ user, token, apiUrl }) {
     }
   };
 
+  const practicePronunciation = async (word) => {
+    if (!word || !word.id || typeof window === 'undefined') return;
+
+    const SpeechRecognition =
+      window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setPronunciationFeedback({
+        wordId: word.id,
+        type: 'error',
+        message: 'Tarayıcınız konuşma tanımayı desteklemiyor.'
+      });
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.lang = 'en-US';
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 1;
+
+    setPronunciationFeedback({
+      wordId: word.id,
+      type: 'info',
+      message: 'Dinleniyor... Lütfen kelimeyi söyleyin.'
+    });
+
+    recognition.onresult = async (event) => {
+      const transcript = event.results[0][0].transcript;
+      try {
+        const response = await fetch(`${apiUrl}/pronunciation/test`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${localStorage.getItem('token')}`
+          },
+          body: JSON.stringify({
+            word_id: word.id,
+            recognized_text: transcript
+          })
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          const score = data.score ?? data.pronunciation?.score ?? 0;
+          let msg = `Skorun ${score}/100. `;
+          if (score >= 85) msg += 'Harika telaffuz!';
+          else if (score >= 70) msg += 'Güzel, biraz daha pratikle mükemmel olacak.';
+          else msg += 'Biraz daha dene, harfi harfine okumaya çalış.';
+
+          setPronunciationFeedback({
+            wordId: word.id,
+            type: 'success',
+            message: `${msg} (Algılanan: "${transcript}")`
+          });
+        } else {
+          setPronunciationFeedback({
+            wordId: word.id,
+            type: 'error',
+            message: 'Telaffuz değerlendirilirken hata oluştu.'
+          });
+        }
+      } catch (err) {
+        console.error('pronunciation test error', err);
+        setPronunciationFeedback({
+          wordId: word.id,
+          type: 'error',
+          message: 'Telaffuz testi sırasında bağlantı hatası oluştu.'
+        });
+      }
+    };
+
+    recognition.onerror = () => {
+      setPronunciationFeedback({
+        wordId: word.id,
+        type: 'error',
+        message: 'Konuşma algılanamadı. Tekrar dener misin?'
+      });
+    };
+
+    recognition.start();
+  };
+
   const startWordMiniQuiz = (word) => {
     if (!word || words.length === 0) return;
     const distractors = words
@@ -281,6 +396,21 @@ function StudentPanel({ user, token, apiUrl }) {
         ? 'Harika! Doğru cevabı seçtin.'
         : 'Tekrar dene! Doğru cevaba bir kez daha bak.'
     });
+
+    // Eğer yanlış ise bu kelimeyi \"zor kelimeler\" istatistiğine ekle
+    if (!isCorrect) {
+      fetch(`${apiUrl}/games/track-error`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        },
+        body: JSON.stringify({ word_id: wordId })
+      }).catch((err) => {
+        console.error('track-error failed', err);
+      });
+    }
+
     if (isCorrect) {
       setTimeout(() => {
         setActiveWordQuiz(null);
@@ -327,49 +457,63 @@ function StudentPanel({ user, token, apiUrl }) {
         </div>
       </div>
 
-      <div className="tabs">
-        <button 
-          className={activeTab === 'dashboard' ? 'active' : ''} 
+      <div className="navigation-cards">
+        <div 
+          className={`nav-card ${activeTab === 'dashboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('dashboard')}
         >
-          🏠 Ana Sayfa
-        </button>
-        <button 
-          className={activeTab === 'words' ? 'active' : ''} 
+          <div className="nav-card-icon">🏠</div>
+          <div className="nav-card-text">Ana Sayfa</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'words' ? 'active' : ''}`}
           onClick={() => setActiveTab('words')}
         >
-          📚 Kelimeler
-        </button>
-        <button 
-          className={activeTab === 'games' ? 'active' : ''} 
+          <div className="nav-card-icon">📚</div>
+          <div className="nav-card-text">Kelimeler</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'games' ? 'active' : ''}`}
           onClick={() => setActiveTab('games')}
         >
-          🎮 Oyunlarım
-        </button>
-        <button 
-          className={activeTab === 'weeklyQuiz' ? 'active' : ''} 
+          <div className="nav-card-icon">🎮</div>
+          <div className="nav-card-text">Oyunlarım</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'weeklyQuiz' ? 'active' : ''}`}
           onClick={() => setActiveTab('weeklyQuiz')}
         >
-          📝 Haftalık Quiz
-        </button>
-        <button 
-          className={activeTab === 'achievements' ? 'active' : ''} 
+          <div className="nav-card-icon">📝</div>
+          <div className="nav-card-text">Haftalık Quiz</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'achievements' ? 'active' : ''}`}
           onClick={() => setActiveTab('achievements')}
         >
-          🏆 Başarılar
-        </button>
-        <button 
-          className={activeTab === 'leaderboard' ? 'active' : ''} 
+          <div className="nav-card-icon">🏆</div>
+          <div className="nav-card-text">Başarılar</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'leaderboard' ? 'active' : ''}`}
           onClick={() => setActiveTab('leaderboard')}
         >
-          🏅 Liderlik Tablosu
-        </button>
-        <button 
-          className={activeTab === 'league' ? 'active' : ''} 
+          <div className="nav-card-icon">🏅</div>
+          <div className="nav-card-text">Liderlik Tablosu</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'league' ? 'active' : ''}`}
           onClick={() => setActiveTab('league')}
         >
-          🏆 Haftalık Lig
-        </button>
+          <div className="nav-card-icon">🏆</div>
+          <div className="nav-card-text">Haftalık Lig</div>
+        </div>
+        <div 
+          className={`nav-card ${activeTab === 'review' ? 'active' : ''}`}
+          onClick={() => setActiveTab('review')}
+        >
+          <div className="nav-card-icon">🔁</div>
+          <div className="nav-card-text">Gözden Geçirme</div>
+        </div>
       </div>
 
       <div className="tab-content">
@@ -392,6 +536,52 @@ function StudentPanel({ user, token, apiUrl }) {
                 <h4>Sıralamayı Gör</h4>
                 <p>Diğer öğrencilerle yarış</p>
               </div>
+              <div className="action-card" onClick={() => setActiveTab('review')}>
+                <div className="action-icon">🔁</div>
+                <h4>Gözden Geçir</h4>
+                <p>Bugün tekrar etmen gereken kelimeler</p>
+              </div>
+            </div>
+
+            <div className="daily-goal-card">
+              <h4>Günlük Hedefin</h4>
+              <p>
+                Bugün hedefin <strong>{dailyTarget}</strong> kelime. 
+              </p>
+              <div className="daily-goal-controls">
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={dailyTarget}
+                  onChange={(e) => setDailyTarget(Number(e.target.value) || 1)}
+                />
+                <button
+                  disabled={updatingDailyTarget}
+                  onClick={async () => {
+                    try {
+                      setUpdatingDailyTarget(true);
+                      const response = await fetch(`${apiUrl}/user/daily-target`, {
+                        method: 'PUT',
+                        headers: {
+                          'Content-Type': 'application/json',
+                          'Authorization': `Bearer ${localStorage.getItem('token')}`
+                        },
+                        body: JSON.stringify({ daily_words_target: dailyTarget })
+                      });
+                      if (!response.ok) {
+                        console.error('Failed to update daily target');
+                      }
+                    } catch (err) {
+                      console.error('update daily target error', err);
+                    } finally {
+                      setUpdatingDailyTarget(false);
+                    }
+                  }}
+                >
+                  Kaydet
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -399,6 +589,57 @@ function StudentPanel({ user, token, apiUrl }) {
         {activeTab === 'words' && (
           <div className="words-section">
             <h3>Kelime Listesi ({words.length} kelime)</h3>
+            <div className="words-toolbar-student">
+              <div>
+                <span className="meta-title">AI Hikaye:</span>
+                <span> Hikaye oluşturmak için 3-5 kelime seç.</span>
+              </div>
+              <button
+                className="btn-outline"
+                disabled={storySelection.length === 0 || storyLoading}
+                onClick={async () => {
+                  try {
+                    setStoryLoading(true);
+                    setStoryError(null);
+                    const response = await fetch(`${apiUrl}/ai/generate-story`, {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${localStorage.getItem('token')}`
+                      },
+                      body: JSON.stringify({
+                        difficulty: 'beginner',
+                        word_ids: storySelection
+                      })
+                    });
+                    if (response.ok) {
+                      const data = await response.json();
+                      setStoryResult(data);
+                    } else {
+                      const err = await response.json().catch(() => ({}));
+                      setStoryError(err.detail || 'Hikaye oluşturulamadı.');
+                    }
+                  } catch (err) {
+                    console.error('generate story error', err);
+                    setStoryError('Hikaye oluşturulurken bağlantı hatası oluştu.');
+                  } finally {
+                    setStoryLoading(false);
+                  }
+                }}
+              >
+                📚 Hikaye Oluştur ({storySelection.length})
+              </button>
+            </div>
+            {storyResult && (
+              <div className="story-result-card">
+                <h4>AI Hikaye</h4>
+                <p>{storyResult.story}</p>
+                <p className="story-meta">
+                  <strong>Konu:</strong> {storyResult.topic} • <strong>Seviye:</strong> {storyResult.difficulty}
+                </p>
+              </div>
+            )}
+            {storyError && <p style={{ color: '#b91c1c' }}>{storyError}</p>}
             {loading ? (
               <div className="loading">Yükleniyor...</div>
             ) : (
@@ -408,8 +649,21 @@ function StudentPanel({ user, token, apiUrl }) {
                     <div className="word-card-header">
                       <div className="word-card-header-left">
                         <div className="word-english">{word.english}</div>
-                        <div className="word-turkish">{word.turkish}</div>
                       </div>
+                      <button
+                        className={`favorite-toggle ${storySelection.includes(word.id) ? 'selected' : ''}`}
+                        type="button"
+                        title="Hikaye için seç / kaldır"
+                        onClick={() => {
+                          setStorySelection((prev) =>
+                            prev.includes(word.id)
+                              ? prev.filter((id) => id !== word.id)
+                              : [...prev, word.id]
+                          );
+                        }}
+                      >
+                        📚
+                      </button>
                     </div>
                     <div className="word-meta">
                       <span className={`difficulty difficulty-${word.difficulty}`}>
@@ -463,10 +717,22 @@ function StudentPanel({ user, token, apiUrl }) {
                         >
                           🔊 Telaffuz
                         </button>
+                        <button
+                          className="btn-outline"
+                          onClick={() => practicePronunciation(word)}
+                          title="Kendi telaffuzunu dene"
+                        >
+                          🎤 Konuş
+                        </button>
                         <button className="btn-outline" onClick={() => startWordMiniQuiz(word)}>
                           🎯 Mini Quiz
                         </button>
                       </div>
+                      {pronunciationFeedback && pronunciationFeedback.wordId === word.id && (
+                        <div className={`pronunciation-feedback ${pronunciationFeedback.type}`}>
+                          {pronunciationFeedback.message}
+                        </div>
+                      )}
                     </div>
                     {activeWordQuiz && activeWordQuiz.wordId === word.id && (
                       <div className="word-mini-quiz">
@@ -549,6 +815,43 @@ function StudentPanel({ user, token, apiUrl }) {
                       <span className="score-date">
                         {new Date(score.created_at).toLocaleDateString('tr-TR')}
                       </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === 'review' && (
+          <div className="dashboard-section">
+            <h3>Gözden Geçirme (SRS)</h3>
+            {reviewLoading ? (
+              <div className="loading">Gözden geçirilecek kelimeler yükleniyor...</div>
+            ) : reviewWords.length === 0 ? (
+              <p>Şu anda gözden geçirilecek kelimen yok. Oyun oynayarak veya kelime çalışarak yeni kelimeler ekleyebilirsin.</p>
+            ) : (
+              <div className="words-grid">
+                {reviewWords.map((word) => (
+                  <div key={word.id} className="word-card">
+                    <div className="word-card-header">
+                      <div className="word-card-header-left">
+                        <div className="word-english">{word.english}</div>
+                      </div>
+                    </div>
+                    <div className="word-meta">
+                      <span className={`difficulty difficulty-${word.difficulty}`}>
+                        Seviye {word.difficulty}
+                      </span>
+                      <span className="category">{word.category}</span>
+                    </div>
+                    <div className="word-actions">
+                      <button
+                        className="btn-outline"
+                        onClick={() => pronounceWord(word)}
+                      >
+                        🔊 Dinle
+                      </button>
                     </div>
                   </div>
                 ))}

@@ -39,51 +39,142 @@
 
 ### Gereksinimler
 
-- Node.js 16+ ve npm
-- Python 3.8+
-- MongoDB (Atlas veya yerel)
+- **Node.js 16+** ve npm (https://nodejs.org/)
+- **Python 3.8+** (https://www.python.org/)
+- **MongoDB** (Atlas veya yerel - https://www.mongodb.com/)
+- **Git** (https://git-scm.com/)
 
-### Kurulum
+### Kurulum Adımları (Detaylı)
 
-#### 1. Repository'yi klonla
+#### 1. Repository'yi Klonla
 ```bash
-git clone https://github.com/yourusername/leximindpro.git
-cd leximindpro_/leximindpro_
+git clone https://github.com/azracayakk/leximindpro.git
+cd leximindpro_version_beta1/leximindpro_
 ```
 
 #### 2. Backend Kurulumu
+
+**Adım 1: Backend klasörüne git**
 ```bash
 cd backend
-
-# Virtual environment oluştur (opsiyonel)
-python -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Bağımlılıkları yükle
-pip install -r requirements.txt
-
-# Environment dosyası oluştur
-cp env.example .env
-
-# .env dosyasını düzenle
-# MONGO_URL, JWT_SECRET_KEY ve diğer ayarları yap
-
-# Backend'i başlat
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
+**Adım 2: Python Virtual Environment oluştur (Önerilir)**
+```bash
+# Windows için:
+python -m venv venv
+venv\Scripts\activate
+
+# Mac/Linux için:
+python3 -m venv venv
+source venv/bin/activate
+```
+
+**Adım 3: Bağımlılıkları yükle**
+```bash
+pip install -r requirements.txt
+```
+
+**Adım 4: Environment dosyası oluştur**
+```bash
+# Windows için:
+copy env.example .env
+
+# Mac/Linux için:
+cp env.example .env
+```
+
+**Adım 5: .env dosyasını düzenle**
+`.env` dosyasını açın ve şu değerleri ayarlayın:
+```env
+MONGO_URL=mongodb://localhost:27017/leximind
+# veya MongoDB Atlas için:
+# MONGO_URL=mongodb+srv://username:password@cluster.mongodb.net/leximind
+
+DB_NAME=leximind
+
+JWT_SECRET_KEY=your-super-secret-key-change-this-in-production-12345
+
+EMERGENT_LLM_KEY=your-emergent-api-key-optional
+
+ADMIN_PASSWORD=admin123
+
+CORS_ORIGINS=http://localhost:3000
+```
+
+**Adım 6: Backend'i başlat**
+```bash
+# Windows/Mac/Linux:
+python -m uvicorn server:app --reload --host 0.0.0.0 --port 8000
+
+# veya direkt:
+python server.py
+```
+
+Backend http://localhost:8000 adresinde çalışacak!
+
 #### 3. Frontend Kurulumu
+
+**Adım 1: Yeni bir terminal açın ve frontend klasörüne gidin**
 ```bash
 cd frontend
+```
 
-# Bağımlılıkları yükle
+**Adım 2: Bağımlılıkları yükle**
+```bash
 npm install
+```
 
-# Frontend'i başlat
+**Adım 3: Environment dosyası oluştur (opsiyonel)**
+```bash
+# Windows için:
+copy env.example .env
+
+# Mac/Linux için:
+cp env.example .env
+```
+
+**Adım 4: .env dosyasını düzenle (opsiyonel)**
+`.env` dosyasını açın ve backend URL'ini ayarlayın:
+```env
+REACT_APP_API_URL=http://localhost:8000/api
+```
+
+**Adım 5: Frontend'i başlat**
+```bash
 npm start
 ```
 
-Uygulama http://localhost:3000 adresinde açılacak!
+Frontend http://localhost:3000 adresinde açılacak!
+
+### ✅ Başlatma Kontrol Listesi
+
+- [ ] Node.js yüklü mü? (`node --version`)
+- [ ] Python yüklü mü? (`python --version`)
+- [ ] MongoDB çalışıyor mu? (yerel veya Atlas bağlantısı)
+- [ ] Backend bağımlılıkları yüklendi mi? (`pip list`)
+- [ ] Frontend bağımlılıkları yüklendi mi? (`npm list`)
+- [ ] Backend `.env` dosyası oluşturuldu mu?
+- [ ] MongoDB URL'i `.env` dosyasında doğru mu?
+- [ ] Backend çalışıyor mu? (http://localhost:8000/docs)
+- [ ] Frontend çalışıyor mu? (http://localhost:3000)
+
+### 🐛 Sorun Giderme
+
+**Backend başlamıyor:**
+- Python versiyonunu kontrol edin (3.8+)
+- Virtual environment aktif mi?
+- Port 8000 kullanımda mı? (`netstat -ano | findstr :8000`)
+
+**Frontend başlamıyor:**
+- Node.js versiyonunu kontrol edin (16+)
+- `node_modules` klasörünü silip `npm install` tekrar çalıştırın
+- Port 3000 kullanımda mı?
+
+**MongoDB bağlantı hatası:**
+- MongoDB servisi çalışıyor mu?
+- `.env` dosyasındaki `MONGO_URL` doğru mu?
+- Firewall MongoDB portunu (27017) engelliyor mu?
 
 ## 🎮 Demo Hesaplar
 

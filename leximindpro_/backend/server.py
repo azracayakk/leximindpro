@@ -123,8 +123,9 @@ class User(BaseModel):
     level: int = 1  # User level based on XP
     profile_star: bool = False  # Profile star badge (season winner)
     season_history: List[dict] = []  # Previous season results
-    word_errors: dict = {}  # {category: error_count} for personalized learning
+    word_errors: dict = {}  # {word_id: error_count} for personalized learning
     pronunciation_scores: dict = {}  # {word_id: [scores]} for pronunciation tracking
+    favorites: List[str] = []  # Favorite word IDs
     last_activity: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -326,10 +327,22 @@ class PersonalizedLearningPlan(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
-    weak_categories: List[str] = []  # Categories with most errors
+    weak_categories: List[str] = []  # Categories with most errors (derived from difficult words)
     study_words: List[str] = []  # Word IDs to study today
     study_count: int = 12  # Number of words to study
     generated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+
+class UserWordProgress(BaseModel):
+    """Spaced Repetition (SRS) - per user & word review state."""
+    model_config = ConfigDict(extra="ignore")
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    word_id: str
+    ease_factor: float = 2.5
+    interval_days: int = 1
+    repetition: int = 0
+    next_review: str = Field(default_factory=lambda: datetime.now(timezone.utc).date().isoformat())
+    last_result: Optional[str] = None  # again, hard, good, easy
 
 class PronunciationTest(BaseModel):
     model_config = ConfigDict(extra="ignore")
@@ -412,6 +425,7 @@ class UserAchievement(BaseModel):
 class StoryRequest(BaseModel):
     difficulty: str = "beginner"
     topic: Optional[str] = None
+    word_ids: Optional[List[str]] = None  # Optional explicit word IDs to include in story
 
 class QuestionRequest(BaseModel):
     word_ids: List[str]
@@ -420,6 +434,7 @@ class QuestionRequest(BaseModel):
 class PronunciationTestRequest(BaseModel):
     word_id: str
     audio_data: Optional[str] = None  # Base64 audio or URL
+    recognized_text: Optional[str] = None  # Optional speech-to-text result from client
 
 class WordMatchGameCreate(BaseModel):
     match_type: str = "meaning"  # meaning, image, sentence
@@ -435,6 +450,14 @@ class TextToWordsRequest(BaseModel):
 class WeeklyQuizSubmission(BaseModel):
     quiz_id: str
     answers: List[dict]
+
+class ReviewUpdate(BaseModel):
+    """Incoming review quality rating for a word."""
+    word_id: str
+    rating: Literal["again", "hard", "good", "easy"]
+
+class FavoritesUpdate(BaseModel):
+    word_id: str
 
 # ============= HELPER FUNCTIONS =============
 
@@ -903,7 +926,10 @@ async def generate_story(story_request: StoryRequest, current_user: dict = Depen
     
     try:
         # Get some words to include in the story
-        words = await db.words.find({}, {"_id": 0}).to_list(20)
+        if story_request.word_ids:
+            words = await db.words.find({"id": {"$in": story_request.word_ids}}, {"_id": 0}).to_list(20)
+        else:
+            words = await db.words.find({}, {"_id": 0}).to_list(20)
         word_list = [f"{w['english']} ({w['turkish']})" for w in random.sample(words, min(5, len(words)))]
         
         topic = story_request.topic or "a day at school"
@@ -1796,6 +1822,7 @@ async def get_admin_system_report(current_user: dict = Depends(require_role("adm
     total_words = await db.words.count_documents({"$or": [{"approved": True}, {"approved": {"$exists": False}}]})
 
     popular_pipeline = [
+        {"$match": {"role": "student"}},
         {"$project": {"word_errors": {"$objectToArray": "$word_errors"}}},
         {"$unwind": "$word_errors"},
         {"$group": {"_id": "$word_errors.k", "count": {"$sum": "$word_errors.v"}}},
@@ -1804,14 +1831,21 @@ async def get_admin_system_report(current_user: dict = Depends(require_role("adm
     ]
     popular_words = await db.users.aggregate(popular_pipeline).to_list(5)
     if not popular_words:
-        sample_words = await db.words.find({}, {"_id": 0, "english": 1, "turkish": 1}).limit(5).to_list(5)
-        popular_words = [{"_id": w["english"], "count": 0, "turkish": w.get("turkish")} for w in sample_words]
+        sample_words = await db.words.find({}, {"_id": 0, "id": 1, "english": 1, "turkish": 1}).limit(5).to_list(5)
+        popular_words = [
+            {"_id": w["id"], "count": 0, "turkish": w.get("turkish"), "english": w.get("english")}
+            for w in sample_words
+        ]
     else:
-        word_map = {w["english"]: w for w in await db.words.find({}, {"_id": 0, "english": 1, "turkish": 1}).to_list(1000)}
+        word_map = {
+            w["id"]: w
+            for w in await db.words.find({}, {"_id": 0, "id": 1, "english": 1, "turkish": 1}).to_list(1000)
+        }
         for item in popular_words:
             word_info = word_map.get(item["_id"])
             if word_info:
                 item["turkish"] = word_info.get("turkish")
+                item["english"] = word_info.get("english")
 
     games_window = now - timedelta(days=6)
     scores = await db.game_scores.find({"created_at": {"$gte": games_window.isoformat()}}, {"_id": 0, "created_at": 1}).to_list(5000)
@@ -2322,14 +2356,31 @@ async def get_teacher_dashboard_actions(current_user: dict = Depends(require_rol
     word_error_aggregate: Dict[str, int] = defaultdict(int)
     students_cursor = db.users.find({"role": "student"}, {"_id": 0, "word_errors": 1})
     async for student in students_cursor:
-        for word, count in (student.get("word_errors") or {}).items():
-            word_error_aggregate[word] += count
-
-    challenging_words = sorted(
-        [{"word": word, "count": count} for word, count in word_error_aggregate.items()],
-        key=lambda item: item["count"],
-        reverse=True
-    )[:5]
+        for word_id, count in (student.get("word_errors") or {}).items():
+            word_error_aggregate[word_id] += count
+    
+    # Map aggregated word_ids back to word documents
+    challenging_words: List[dict] = []
+    if word_error_aggregate:
+        top_items = sorted(
+            word_error_aggregate.items(),
+            key=lambda item: item[1],
+            reverse=True
+        )[:10]
+        word_ids = [word_id for word_id, _ in top_items]
+        words = await db.words.find({"id": {"$in": word_ids}}, {"_id": 0}).to_list(100)
+        word_map = {w["id"]: w for w in words}
+        for word_id, count in top_items:
+            word = word_map.get(word_id)
+            if word:
+                challenging_words.append(
+                    {
+                        "word_id": word_id,
+                        "english": word.get("english"),
+                        "turkish": word.get("turkish"),
+                        "count": count,
+                    }
+                )
 
     return {
         "struggling_students": struggling_students,
@@ -2387,40 +2438,25 @@ async def get_personalized_learning_plan(current_user: dict = Depends(get_curren
     
     word_errors = user.get("word_errors", {})
     
-    # Find categories with most errors
+    # word_errors now stores per-word error counts: {word_id: error_count}
+    # Find most difficult words for this user
+    difficult_word_ids: List[str] = []
     if word_errors:
-        sorted_categories = sorted(word_errors.items(), key=lambda x: x[1], reverse=True)
-        weak_categories = [cat for cat, count in sorted_categories[:3]]  # Top 3 weak categories
-    else:
-        weak_categories = []
+        sorted_words = sorted(word_errors.items(), key=lambda x: x[1], reverse=True)
+        difficult_word_ids = [word_id for word_id, _ in sorted_words[:50]]
     
-    # Get words from weak categories
-    study_words = []
-    if weak_categories:
-        words = await db.words.find({
-            "category": {"$in": weak_categories}
-        }, {"_id": 0}).to_list(100)
-        # Select random words from weak categories (12 words)
-        study_words = random.sample([w["id"] for w in words], min(12, len(words)))
+    study_words: List[str] = []
+    weak_categories: List[str] = []
+    
+    if difficult_word_ids:
+        words_cursor = db.words.find({"id": {"$in": difficult_word_ids}}, {"_id": 0})
+        words = await words_cursor.to_list(100)
+        study_words = [w["id"] for w in words][:12]
+        weak_categories = list({w.get("category", "general") for w in words})
     else:
         # If no errors, get random words
         words = await db.words.find({}, {"_id": 0}).to_list(100)
         study_words = random.sample([w["id"] for w in words], min(12, len(words)))
-    
-    # Create or update learning plan
-    plan = PersonalizedLearningPlan(
-        user_id=current_user["id"],
-        weak_categories=weak_categories,
-        study_words=study_words,
-        study_count=len(study_words)
-    )
-    
-    # Save plan
-    await db.personalized_plans.update_one(
-        {"user_id": current_user["id"]},
-        {"$set": plan.model_dump()},
-        upsert=True
-    )
     
     # Get word details
     word_details = []
@@ -2433,18 +2469,138 @@ async def get_personalized_learning_plan(current_user: dict = Depends(get_curren
         "weak_categories": weak_categories,
         "study_words": word_details,
         "study_count": len(study_words),
-        "message": f"Sen en çok {', '.join(weak_categories)} kelimelerinde hata yapıyorsun. Bugün {len(study_words)} kelimeyi tekrar edeceksin."
+        "message": (
+            f"Sen en çok {', '.join(weak_categories)} kategorilerindeki kelimelerde hata yapıyorsun. "
+            f"Bugün {len(study_words)} kelimeyi tekrar edeceksin."
+        )
     }
 
+
+@api_router.get("/learning/review-words")
+async def get_review_words(limit: int = 20, current_user: dict = Depends(get_current_user)):
+    """
+    Get words that are due for spaced repetition review for the current user.
+    If the user has no review history yet, fall back to random words.
+    """
+    today = datetime.now(timezone.utc).date()
+    today_iso = today.isoformat()
+    
+    progress_docs = await db.user_word_progress.find(
+        {
+            "user_id": current_user["id"],
+            "next_review": {"$lte": today_iso}
+        },
+        {"_id": 0}
+    ).to_list(limit)
+    
+    if not progress_docs:
+        # Initialize with random words
+        words = await db.words.find({}, {"_id": 0}).to_list(limit * 2)
+        random.shuffle(words)
+        selected = words[:limit]
+        return {"mode": "initial", "words": selected}
+    
+    word_ids = [p["word_id"] for p in progress_docs]
+    words = await db.words.find({"id": {"$in": word_ids}}, {"_id": 0}).to_list(limit * 2)
+    word_map = {w["id"]: w for w in words}
+    
+    due_words = []
+    for p in progress_docs:
+        word = word_map.get(p["word_id"])
+        if word:
+            item = dict(word)
+            item["srs"] = {
+                "interval_days": p.get("interval_days", 1),
+                "repetition": p.get("repetition", 0),
+                "next_review": p.get("next_review"),
+                "last_result": p.get("last_result")
+            }
+            due_words.append(item)
+    
+    # Ensure we don't send more than requested
+    due_words = due_words[:limit]
+    return {"mode": "review", "words": due_words}
+
+
+def _update_srs(progress: dict, rating: str, today: datetime.date) -> dict:
+    """Small helper implementing simplified SM-2 style SRS updates."""
+    ease = float(progress.get("ease_factor", 2.5))
+    interval = int(progress.get("interval_days", 1))
+    repetition = int(progress.get("repetition", 0))
+    
+    if rating == "again":
+        repetition = 0
+        interval = 1
+        ease = max(1.3, ease - 0.2)
+    elif rating == "hard":
+        repetition += 1
+        interval = max(1, int(interval * 1.2))
+        ease = max(1.3, ease - 0.15)
+    elif rating == "good":
+        repetition += 1
+        interval = max(1, int(interval * ease))
+    elif rating == "easy":
+        repetition += 1
+        interval = max(1, int(interval * ease * 1.3))
+        ease += 0.15
+    
+    next_review = (today + timedelta(days=interval)).isoformat()
+    
+    progress.update(
+        {
+            "ease_factor": ease,
+            "interval_days": interval,
+            "repetition": repetition,
+            "next_review": next_review,
+            "last_result": rating,
+        }
+    )
+    return progress
+
+
+@api_router.post("/learning/review-result")
+async def update_review_result(update: ReviewUpdate, current_user: dict = Depends(get_current_user)):
+    """
+    Update spaced repetition progress after the user reviews a word.
+    """
+    today = datetime.now(timezone.utc)
+    existing = await db.user_word_progress.find_one(
+        {"user_id": current_user["id"], "word_id": update.word_id},
+        {"_id": 0}
+    )
+    
+    if not existing:
+        progress = UserWordProgress(
+            user_id=current_user["id"],
+            word_id=update.word_id,
+            last_result=update.rating,
+        ).model_dump()
+    else:
+        progress = dict(existing)
+    
+    progress = _update_srs(progress, update.rating, today.date())
+    
+    await db.user_word_progress.update_one(
+        {"user_id": current_user["id"], "word_id": update.word_id},
+        {"$set": progress},
+        upsert=True
+    )
+    
+    return {"message": "Review updated", "progress": progress}
+
+class TrackErrorRequest(BaseModel):
+    word_id: str
+
 @api_router.post("/games/track-error")
-async def track_word_error(word_id: str, category: str, current_user: dict = Depends(get_current_user)):
-    """Track word error for personalized learning"""
+async def track_word_error(request: TrackErrorRequest, current_user: dict = Depends(get_current_user)):
+    """Track word error for personalized learning (per word)."""
     user = await db.users.find_one({"id": current_user["id"]})
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     
-    word_errors = user.get("word_errors", {})
-    word_errors[category] = word_errors.get(category, 0) + 1
+    word_errors = user.get("word_errors", {}) or {}
+    word_id = request.word_id
+    word_errors[word_id] = int(word_errors.get(word_id, 0)) + 1
     
     await db.users.update_one(
         {"id": current_user["id"]},
@@ -2452,6 +2608,38 @@ async def track_word_error(word_id: str, category: str, current_user: dict = Dep
     )
     
     return {"message": "Error tracked", "errors": word_errors}
+
+
+@api_router.get("/learning/hard-words")
+async def get_hard_words(limit: int = 5, current_user: dict = Depends(get_current_user)):
+    """
+    Return the user's most difficult words based on per-word error counts.
+    """
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    word_errors = user.get("word_errors", {}) or {}
+    if not word_errors:
+        return {"words": []}
+    
+    sorted_items = sorted(word_errors.items(), key=lambda x: x[1], reverse=True)[: limit * 2]
+    word_ids = [word_id for word_id, _ in sorted_items]
+    
+    words = await db.words.find({"id": {"$in": word_ids}}, {"_id": 0}).to_list(limit * 2)
+    word_map = {w["id"]: w for w in words}
+    
+    result = []
+    for word_id, count in sorted_items:
+        word = word_map.get(word_id)
+        if word:
+            item = dict(word)
+            item["error_count"] = int(count)
+            result.append(item)
+        if len(result) >= limit:
+            break
+    
+    return {"words": result}
 
 # ============= PRONUNCIATION TEST =============
 
@@ -2465,9 +2653,25 @@ async def pronunciation_test(test_request: PronunciationTestRequest, current_use
     if not word:
         raise HTTPException(status_code=404, detail="Word not found")
     
-    # Simulate pronunciation score (0-100)
+    # If client already did speech recognition, use recognized_text similarity
+    base_score = None
+    if test_request.recognized_text:
+        target = (word.get("english") or "").strip().lower()
+        spoken = test_request.recognized_text.strip().lower()
+        if target:
+            # Very simple similarity: proportion of matching prefix characters
+            max_len = max(len(target), len(spoken))
+            match_count = 0
+            for t_char, s_char in zip(target, spoken):
+                if t_char == s_char:
+                    match_count += 1
+            similarity = match_count / max_len if max_len > 0 else 0.0
+            base_score = int(40 + similarity * 60)  # Map to 40-100 aralığı
+    
+    # Fallback: simulate pronunciation score (0-100)
     # In production: Use speech-to-text API and compare with word pronunciation
-    base_score = random.randint(60, 95)  # Simulated score
+    if base_score is None:
+        base_score = random.randint(60, 95)  # Simulated score
     
     # Save pronunciation test
     pronunciation = PronunciationTest(
@@ -2890,9 +3094,74 @@ async def get_user_profile(current_user: dict = Depends(get_current_user)):
         "games_played": user.get("games_played", 0),
         "streak": user.get("streak", 0),
         "profile_star": user.get("profile_star", False),
+        "daily_words_target": user.get("daily_words_target", 5),
+        "daily_words_progress": user.get("daily_words_progress", 0),
+        "favorites": user.get("favorites", []),
         "achievements": achievements,
         "season_history": user.get("season_history", [])
     }
+
+
+class DailyTargetUpdate(BaseModel):
+    daily_words_target: int
+
+
+@api_router.put("/user/daily-target")
+async def update_daily_target(
+    payload: DailyTargetUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Update user's daily words target."""
+    if payload.daily_words_target < 1 or payload.daily_words_target > 100:
+        raise HTTPException(status_code=400, detail="daily_words_target 1 ile 100 arasında olmalıdır.")
+    
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"daily_words_target": payload.daily_words_target}}
+    )
+    
+    return {"message": "Günlük hedef güncellendi", "daily_words_target": payload.daily_words_target}
+
+
+@api_router.get("/user/favorites")
+async def get_favorites(current_user: dict = Depends(get_current_user)):
+    """Return user's favorite words."""
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    favorite_ids: List[str] = user.get("favorites", []) or []
+    if not favorite_ids:
+        return {"favorites": [], "words": []}
+    
+    words = await db.words.find({"id": {"$in": favorite_ids}}, {"_id": 0}).to_list(len(favorite_ids))
+    return {"favorites": favorite_ids, "words": words}
+
+
+@api_router.post("/user/favorites/toggle")
+async def toggle_favorite(
+    update: FavoritesUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """Toggle a word in user's favorites list."""
+    user = await db.users.find_one({"id": current_user["id"]})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    favorites: List[str] = list(user.get("favorites", []) or [])
+    if update.word_id in favorites:
+        favorites = [wid for wid in favorites if wid != update.word_id]
+        action = "removed"
+    else:
+        favorites.append(update.word_id)
+        action = "added"
+    
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"favorites": favorites}}
+    )
+    
+    return {"message": f"Favorite {action}", "favorites": favorites}
 
 # Update game scores to award XP
 @api_router.post("/games/scores", response_model=GameScore)

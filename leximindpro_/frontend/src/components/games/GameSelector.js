@@ -55,7 +55,7 @@ const getPerformanceFeedback = (score, correct, wrong) => {
       title: 'Güzel Gidiyorsun!',
       message: `Doğruluk oranı %${accuracyPercent}. Ufak tekrarlarla becerilerini güçlendirebilirsin.`,
       suggestions: [
-        'Az yanıldığın kelimeleri favorilere ekleyip yeniden gözden geçir.',
+        'Az yanıldığın kelimeleri not edip tekrar gözden geçir.',
         'Aynı oyunu bir tur daha oyna ve doğruluk oranını artır.',
         'Haftalık quizde kısa bir test çözerek bilgini tazele.'
       ]
@@ -83,17 +83,28 @@ function GameSelector({ apiUrl, token, onClose, onNavigate = () => {} }) {
   const [words, setWords] = useState([]);
   const [loading, setLoading] = useState(true);
   const [gameResult, setGameResult] = useState(null);
+  const [wordSource, setWordSource] = useState('all'); // all | hard
 
-  const fetchWords = async () => {
+  const fetchWords = async (source = wordSource) => {
+    setLoading(true);
     try {
-      const response = await fetch(`${apiUrl}/words`, {
+      let url = `${apiUrl}/words`;
+      if (source === 'hard') {
+        url = `${apiUrl}/learning/hard-words`;
+      }
+
+      const response = await fetch(url, {
         headers: {
           'Authorization': `Bearer ${token}`
         }
       });
       if (response.ok) {
         const data = await response.json();
-        setWords(data);
+        if (source === 'all') {
+          setWords(data);
+        } else {
+          setWords(data.words || []);
+        }
       }
     } catch (error) {
       console.error('Error fetching words:', error);
@@ -103,7 +114,7 @@ function GameSelector({ apiUrl, token, onClose, onNavigate = () => {} }) {
   };
 
   useEffect(() => {
-    fetchWords();
+    fetchWords('all');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -287,6 +298,27 @@ function GameSelector({ apiUrl, token, onClose, onNavigate = () => {} }) {
           <p className="selector-subtitle">Eğlenceli oyunlarla İngilizce öğren</p>
         </div>
         <button className="btn-main-menu" onClick={handleExit}>Ana Menü</button>
+      </div>
+
+      <div className="word-source-toggle">
+        <button
+          className={wordSource === 'all' ? 'active' : ''}
+          onClick={() => {
+            setWordSource('all');
+            fetchWords('all');
+          }}
+        >
+          Tüm Kelimeler
+        </button>
+        <button
+          className={wordSource === 'hard' ? 'active' : ''}
+          onClick={() => {
+            setWordSource('hard');
+            fetchWords('hard');
+          }}
+        >
+          🔥 Zorlu Kelimeler
+        </button>
       </div>
 
       <div className="games-grid">
