@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 import jwt
 from passlib.context import CryptContext
 import random
+from openai import OpenAI
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -36,8 +37,7 @@ logger = logging.getLogger(__name__)
 #     logger.warning("emergentintegrations not available. AI features will be disabled.")
 
 # AI özellikleri manuel olarak devre dışı bırakıldı (ve gecikme düzeltildi)
-EMERGENT_AVAILABLE = False
-EMERGENT_AVAILABLE = False
+EMERGENT_AVAILABLE = True
 
 # MongoDB connection
 mongo_url = os.environ.get('MONGO_URL')
@@ -921,35 +921,43 @@ async def check_achievements(user_id: str):
 
 @api_router.post("/ai/generate-story")
 async def generate_story(story_request: StoryRequest, current_user: dict = Depends(get_current_user)):
-    if not EMERGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI features are not available. emergentintegrations package is not installed.")
-    
     try:
         # Get some words to include in the story
         if story_request.word_ids:
             words = await db.words.find({"id": {"$in": story_request.word_ids}}, {"_id": 0}).to_list(20)
         else:
             words = await db.words.find({}, {"_id": 0}).to_list(20)
-        word_list = [f"{w['english']} ({w['turkish']})" for w in random.sample(words, min(5, len(words)))]
+        word_list = [f"{w['english']}" for w in random.sample(words, min(5, len(words)))]
         
         topic = story_request.topic or "a day at school"
-        system_message = f"You are an English teacher. Create a short story (3-4 sentences) for {story_request.difficulty} level students about {topic}. Include these words: {', '.join(word_list)}. Make it educational and fun."
         
-        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY is not configured")
+        # OpenAI API kullan
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured. Please set OPENAI_API_KEY in your .env file.")
         
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"story_{current_user['id']}_{datetime.now().timestamp()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4-turbo")
+        client = OpenAI(api_key=openai_key)
         
-        user_message = UserMessage(text=f"Create a story about {topic}")
-        response = await chat.send_message(user_message)
+        prompt = f"""You are an English teacher. Create a short story (3-4 sentences) for {story_request.difficulty} level students about {topic}. 
+        
+Include these words in the story: {', '.join(word_list)}.
+
+Make it educational and fun. Write only the story, nothing else."""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an English teacher helping students learn vocabulary through stories."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=200,
+            temperature=0.7
+        )
+        
+        story_text = response.choices[0].message.content.strip()
         
         return {
-            "story": response,
+            "story": story_text,
             "topic": topic,
             "difficulty": story_request.difficulty,
             "words_used": word_list
@@ -962,12 +970,20 @@ async def generate_story(story_request: StoryRequest, current_user: dict = Depen
 
 @api_router.post("/ai/generate-examples")
 async def generate_examples(request: GenerateExamplesRequest, current_user: dict = Depends(get_current_user)):
-    if not EMERGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI features are not available. emergentintegrations package is not installed.")
-    
     try:
-        system_message = f"""You are an English teacher. Create {request.count} simple example sentences for language learners.
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            # Fallback examples
+            return {"examples": [
+                {"sentence": f"I use {request.word} every day.", "turkish": f"Her gün {request.turkish} kullanırım."},
+                {"sentence": f"This {request.word} is good.", "turkish": f"Bu {request.turkish} iyidir."},
+                {"sentence": f"She likes {request.word}.", "turkish": f"O {request.turkish} seviyor."}
+            ]}
         
+        client = OpenAI(api_key=openai_key)
+        
+        prompt = f"""You are an English teacher. Create {request.count} simple example sentences for language learners.
+
 Rules:
 - Use the word "{request.word}" in each sentence
 - Level: {request.level}
@@ -975,25 +991,24 @@ Rules:
 - Use simple grammar
 - Return ONLY valid JSON array format
 
-Format: [{{"sentence": "English sentence.", "turkish": "Türkçe çeviri."}}]"""
+Format: [{{"sentence": "English sentence.", "turkish": "Türkçe çeviri."}}]
+
+Create {request.count} example sentences using the word '{request.word}' ({request.turkish})."""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an English teacher. Always return valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=300,
+            temperature=0.7
+        )
         
-        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY is not configured")
-        
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"examples_{current_user['id']}_{datetime.now().timestamp()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4-turbo")
-        
-        user_message = UserMessage(text=f"Create {request.count} example sentences using the word '{request.word}' ({request.turkish})")
-        response = await chat.send_message(user_message)
+        response_text = response.choices[0].message.content.strip()
         
         # Parse JSON response with improved extraction
         try:
-            response_text = str(response)
-            
             # Use regex to find JSON array pattern
             json_match = re.search(r'\[[\s\S]*?\]', response_text)
             if json_match:
@@ -1074,9 +1089,6 @@ async def bulk_upload_words(upload: BulkWordsUpload, current_user: dict = Depend
 
 @api_router.post("/ai/generate-questions")
 async def generate_questions(question_request: QuestionRequest, current_user: dict = Depends(get_current_user)):
-    if not EMERGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI features are not available. emergentintegrations package is not installed.")
-    
     try:
         # Get words
         words = []
@@ -1090,25 +1102,35 @@ async def generate_questions(question_request: QuestionRequest, current_user: di
         
         word_list = [f"{w['english']} = {w['turkish']}" for w in words]
         
-        system_message = "You are an English teacher. Generate 3 multiple choice questions using the provided words. Return ONLY a JSON array of questions."
-        prompt = f"Create 3 multiple choice questions using these words: {', '.join(word_list)}. Format: [{{\"question\": \"...\", \"options\": [\"A\", \"B\", \"C\", \"D\"], \"correct\": 0}}]"
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured. Please set OPENAI_API_KEY in your .env file.")
         
-        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY is not configured")
+        client = OpenAI(api_key=openai_key)
         
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"questions_{current_user['id']}_{datetime.now().timestamp()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4-turbo")
+        prompt = f"""You are an English teacher. Generate 3 multiple choice questions using the provided words.
+
+Words: {', '.join(word_list)}
+
+Return ONLY a JSON array of questions in this format:
+[{{"question": "What does [word] mean?", "options": ["Option A", "Option B", "Option C", "Option D"], "correct": 0}}]
+
+Create 3 multiple choice questions using these words."""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an English teacher. Always return valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=400,
+            temperature=0.7
+        )
         
-        user_message = UserMessage(text=prompt)
-        response = await chat.send_message(user_message)
+        response_text = response.choices[0].message.content.strip()
         
         # Parse JSON response
         try:
-            response_text = str(response)
             json_match = re.search(r'\[[\s\S]*?\]', response_text)
             if json_match:
                 questions = json.loads(json_match.group(0))
@@ -1117,7 +1139,7 @@ async def generate_questions(question_request: QuestionRequest, current_user: di
         except Exception as e:
             logger.warning(f"Question JSON parsing failed: {e}")
         
-        return {"questions": response, "words_used": word_list}
+        return {"questions": [], "words_used": word_list}
     except Exception as e:
         logger.error(f"Question generation error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to generate questions: {str(e)}")
@@ -2879,32 +2901,38 @@ async def generate_story_for_milestone(request: StoryProgressRequest, current_us
     selected_words = random.sample(words, min(10, len(words)))
     word_list = [f"{w['english']} ({w['turkish']})" for w in selected_words]
     
-    if not EMERGENT_AVAILABLE:
-        # Fallback story
-        story_text = f"Once upon a time, there was a student who learned {request.words_learned_count} words. They used words like {', '.join([w['english'] for w in selected_words[:5]])} in their daily life."
-        highlighted_word_ids = [w["id"] for w in selected_words[:5]]
-    else:
-        try:
-            system_message = f"Create a short story (3-4 sentences) for English learners. Include these words naturally: {', '.join(word_list)}. Highlight the learned words in the story."
+    try:
+        # OpenAI API kullan
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            # Fallback story
+            story_text = f"Once upon a time, there was a student who learned {request.words_learned_count} words. They used words like {', '.join([w['english'] for w in selected_words[:5]])} in their daily life."
+            highlighted_word_ids = [w["id"] for w in selected_words[:5]]
+        else:
+            client = OpenAI(api_key=openai_key)
             
-            emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-            if not emergent_key:
-                raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+            prompt = f"""Create a short story (3-4 sentences) for English learners celebrating {request.words_learned_count} words learned. 
             
-            chat = LlmChat(
-                api_key=emergent_key,
-                session_id=f"story_{current_user['id']}_{datetime.now().timestamp()}",
-                system_message=system_message
-            ).with_model("openai", "gpt-4-turbo")
+Include these words naturally: {', '.join([w['english'] for w in selected_words[:5]])}.
+
+Make it encouraging and fun. Write only the story, nothing else."""
+
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You are an English teacher helping students learn vocabulary through stories."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=200,
+                temperature=0.7
+            )
             
-            user_message = UserMessage(text=f"Create a story celebrating {request.words_learned_count} words learned")
-            response = await chat.send_message(user_message)
-            story_text = str(response)
-            highlighted_word_ids = [w["id"] for w in selected_words]
-        except Exception as e:
-            logger.error(f"Story generation error: {e}")
-            story_text = f"Congratulations! You've learned {request.words_learned_count} words. Keep learning!"
-            highlighted_word_ids = []
+            story_text = response.choices[0].message.content.strip()
+            highlighted_word_ids = [w["id"] for w in selected_words[:5]]
+    except Exception as e:
+        logger.error(f"Story generation error: {e}")
+        story_text = f"Congratulations! You've learned {request.words_learned_count} words. Keep learning!"
+        highlighted_word_ids = []
     
     # Save story progress
     story_progress = StoryProgress(
@@ -3252,30 +3280,36 @@ async def create_game_score_with_xp(score_create: GameScoreCreate, current_user:
 @api_router.post("/teacher/text-to-words")
 async def extract_words_from_text(request: TextToWordsRequest, current_user: dict = Depends(require_role("teacher", "admin"))):
     """Extract words from teacher's text and auto-create word list"""
-    if not EMERGENT_AVAILABLE:
-        raise HTTPException(status_code=503, detail="AI features are not available")
-    
     try:
-        system_message = """You are an English teacher assistant. Extract all important English words from the given text.
-        Return ONLY a JSON array of words with their Turkish translations.
-        Format: [{"english": "word", "turkish": "çeviri", "category": "general"}]"""
+        openai_key = os.environ.get('OPENAI_API_KEY')
+        if not openai_key:
+            raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured. Please set OPENAI_API_KEY in your .env file.")
         
-        emergent_key = os.environ.get('EMERGENT_LLM_KEY')
-        if not emergent_key:
-            raise HTTPException(status_code=500, detail="EMERGENT_LLM_KEY not configured")
+        client = OpenAI(api_key=openai_key)
         
-        chat = LlmChat(
-            api_key=emergent_key,
-            session_id=f"text_to_words_{current_user['id']}_{datetime.now().timestamp()}",
-            system_message=system_message
-        ).with_model("openai", "gpt-4-turbo")
+        prompt = f"""You are an English teacher assistant. Extract all important English words from the given text.
+
+Return ONLY a JSON array of words with their Turkish translations.
+Format: [{{"english": "word", "turkish": "çeviri", "category": "general"}}]
+
+Extract words from this text:
+
+{request.text}"""
+
+        response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are an English teacher assistant. Always return valid JSON arrays."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
         
-        user_message = UserMessage(text=f"Extract words from this text:\n\n{request.text}")
-        response = await chat.send_message(user_message)
+        response_text = response.choices[0].message.content.strip()
         
         # Parse JSON
         try:
-            response_text = str(response)
             json_match = re.search(r'\[[\s\S]*?\]', response_text)
             if json_match:
                 words = json.loads(json_match.group(0))
