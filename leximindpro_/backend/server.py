@@ -849,6 +849,64 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_role("a
 
 # ============= WORD MANAGEMENT =============
 
+# Kelime Yönetimi için yeni endpoint (WordModel kullanarak)
+@api_router.post("/v1/words", status_code=status.HTTP_201_CREATED)
+async def create_word_v1(word: WordModel, current_user: dict = Depends(require_role("admin", "teacher"))):
+    """
+    Admin panelinden yeni bir kelime oluşturur.
+    WordModel kullanarak basit kelime ekleme.
+    """
+    try:
+        # Gelen veriyi MongoDB'ye uygun formata çevir
+        # WordModel -> Word formatına dönüştür
+        new_word_data = {
+            "id": str(uuid.uuid4()),
+            "english": word.word,
+            "turkish": word.translation,
+            "difficulty": word.level,
+            "category": word.category,
+            "synonyms": [],
+            "antonyms": [],
+            "example_sentences": [],
+            "created_by": current_user["username"],
+            "approved": True,
+            "pack_ids": [],
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        
+        # Aynı kelime zaten var mı kontrol et
+        existing = await db.words.find_one({"english": word.word.lower()})
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'{word.word}' kelimesi zaten mevcut."
+            )
+        
+        # Veritabanına ekle
+        result = await db.words.insert_one(new_word_data)
+        
+        if result.inserted_id:
+            return {
+                "status": "success",
+                "message": "Kelime başarıyla eklendi",
+                "id": new_word_data["id"],
+                "word": word.word,
+                "translation": word.translation
+            }
+        
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Kelime eklenirken bir hata oluştu."
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Word creation error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Kelime eklenirken bir hata oluştu: {str(e)}"
+        )
+
 @api_router.post("/words", response_model=Word)
 async def create_word(word_create: WordCreate, current_user: dict = Depends(require_role("admin", "teacher"))):
     
