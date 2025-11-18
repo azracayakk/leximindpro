@@ -155,6 +155,37 @@ class ExampleSentence(BaseModel):
     sentence: str
     turkish: str
 
+# MongoDB ObjectId için helper class (Pydantic v2 uyumlu)
+class PyObjectId(str):
+    """MongoDB ObjectId için string wrapper"""
+    @classmethod
+    def __get_validators__(cls):
+        yield cls.validate
+
+    @classmethod
+    def validate(cls, v):
+        if not isinstance(v, str):
+            raise TypeError('string required')
+        return str(v)
+
+# Kelime Yönetimi için yeni modeller
+class WordModel(BaseModel):
+    """Kelime modeli - Kelime Yönetimi paneli için"""
+    model_config = ConfigDict(extra="ignore")
+    word: str = Field(..., description="İngilizce kelime (örn: apple)")
+    translation: str = Field(..., description="Türkçe çeviri (örn: elma)")
+    level: int = Field(..., ge=1, le=3, description="Seviye (1, 2 veya 3)")
+    category: str = Field(..., description="Kategori (örn: food, animals, education)")
+
+# Güncelleme için opsiyonel alanlar
+class UpdateWordModel(BaseModel):
+    """Kelime güncelleme modeli - tüm alanlar opsiyonel"""
+    model_config = ConfigDict(extra="ignore")
+    word: Optional[str] = Field(None, description="İngilizce kelime")
+    translation: Optional[str] = Field(None, description="Türkçe çeviri")
+    level: Optional[int] = Field(None, ge=1, le=3, description="Seviye (1, 2 veya 3)")
+    category: Optional[str] = Field(None, description="Kategori")
+
 class Word(BaseModel):
     model_config = ConfigDict(extra="ignore")
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -932,8 +963,14 @@ async def generate_story(story_request: StoryRequest, current_user: dict = Depen
         topic = story_request.topic or "a day at school"
         
         # OpenAI API kullan
+        # .env dosyasını tekrar yükle (runtime'da değişiklik olabilir)
+        load_dotenv(ROOT_DIR / '.env', override=True)
         openai_key = os.environ.get('OPENAI_API_KEY')
         if not openai_key:
+            # Debug: .env dosyasının varlığını kontrol et
+            env_path = ROOT_DIR / '.env'
+            if not env_path.exists():
+                raise HTTPException(status_code=500, detail=f"OPENAI_API_KEY is not configured. .env file not found at {env_path}")
             raise HTTPException(status_code=500, detail="OPENAI_API_KEY is not configured. Please set OPENAI_API_KEY in your .env file.")
         
         client = OpenAI(api_key=openai_key)
