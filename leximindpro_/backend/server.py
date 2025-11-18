@@ -923,6 +923,31 @@ async def create_word(word_create: WordCreate, current_user: dict = Depends(requ
     await db.words.insert_one(word.model_dump())
     return word
 
+# Kelime Yönetimi için GET endpoint (WordModel formatında)
+@api_router.get("/v1/words")
+async def get_all_words_v1(current_user: dict = Depends(get_current_user)):
+    """
+    Veritabanındaki tüm kelimeleri listeler.
+    WordModel formatında döndürür (word, translation, level, category).
+    """
+    words_list = []
+    
+    # 'words' koleksiyonundaki tüm belgeleri bul
+    words_cursor = db.words.find({}, {"_id": 0})  # _id'yi zaten dahil etmiyoruz
+    
+    async for word in words_cursor:
+        # WordModel formatına dönüştür (english -> word, turkish -> translation, difficulty -> level)
+        word_model = {
+            "id": word.get("id", ""),
+            "word": word.get("english", ""),
+            "translation": word.get("turkish", ""),
+            "level": word.get("difficulty", 1),
+            "category": word.get("category", "general")
+        }
+        words_list.append(word_model)
+    
+    return words_list
+
 @api_router.get("/words", response_model=List[Word])
 async def get_words(current_user: dict = Depends(get_current_user)):
     words = await db.words.find({}, {"_id": 0}).to_list(1000)
