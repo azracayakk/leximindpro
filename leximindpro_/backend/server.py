@@ -579,10 +579,23 @@ async def get_current_user_with_password(credentials: HTTPAuthorizationCredentia
 def require_role(*allowed_roles: str):
     """Dependency factory for role-based authorization"""
     def role_checker(current_user: dict = Depends(get_current_user)):
-        if current_user.get("role") not in allowed_roles:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        user_role = current_user.get("role")
+        if user_role not in allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Bu işlem için {', '.join(allowed_roles)} rolü gereklidir. Mevcut rolünüz: {user_role}"
+            )
         return current_user
     return role_checker
+
+def require_admin(current_user: dict = Depends(get_current_user)):
+    """Sadece admin rolü için özel dependency"""
+    if current_user.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Bu işlem sadece admin kullanıcıları tarafından yapılabilir."
+        )
+    return current_user
 
 # ============= INITIALIZE DEFAULT DATA =============
 
@@ -850,6 +863,7 @@ async def delete_user(user_id: str, current_user: dict = Depends(require_role("a
 # ============= WORD MANAGEMENT =============
 
 # Kelime Yönetimi için yeni endpoint (WordModel kullanarak)
+# GÜVENLİK: Sadece admin ve teacher erişebilir (JWT token gerekli)
 @api_router.post("/v1/words", status_code=status.HTTP_201_CREATED)
 async def create_word_v1(word: WordModel, current_user: dict = Depends(require_role("admin", "teacher"))):
     """
@@ -924,6 +938,7 @@ async def create_word(word_create: WordCreate, current_user: dict = Depends(requ
     return word
 
 # Kelime Yönetimi için GET endpoint (WordModel formatında)
+# GÜVENLİK: Giriş yapmış kullanıcılar erişebilir (JWT token gerekli)
 @api_router.get("/v1/words")
 async def get_all_words_v1(current_user: dict = Depends(get_current_user)):
     """
@@ -954,6 +969,7 @@ async def get_words(current_user: dict = Depends(get_current_user)):
     return [Word(**word) for word in words]
 
 # Kelime Yönetimi için DELETE endpoint (v1)
+# GÜVENLİK: Sadece admin ve teacher erişebilir (JWT token gerekli)
 @api_router.delete("/v1/words/{word_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_word_v1(word_id: str, current_user: dict = Depends(require_role("admin", "teacher"))):
     """
@@ -971,6 +987,7 @@ async def delete_word_v1(word_id: str, current_user: dict = Depends(require_role
     return None  # 204 No Content için None döndür
 
 # Kelime Yönetimi için UPDATE endpoint (v1)
+# GÜVENLİK: Sadece admin ve teacher erişebilir (JWT token gerekli)
 @api_router.put("/v1/words/{word_id}")
 async def update_word_v1(
     word_id: str,
