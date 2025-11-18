@@ -953,6 +953,102 @@ async def get_words(current_user: dict = Depends(get_current_user)):
     words = await db.words.find({}, {"_id": 0}).to_list(1000)
     return [Word(**word) for word in words]
 
+# Kelime Yönetimi için DELETE endpoint (v1)
+@api_router.delete("/v1/words/{word_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_word_v1(word_id: str, current_user: dict = Depends(require_role("admin", "teacher"))):
+    """
+    ID'ye göre bir kelimeyi siler.
+    """
+    # MongoDB'de id alanını kullanarak sil (ObjectId değil, string id kullanıyoruz)
+    delete_result = await db.words.delete_one({"id": word_id})
+    
+    if delete_result.deleted_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Kelime (ID: {word_id}) bulunamadı."
+        )
+    
+    return None  # 204 No Content için None döndür
+
+# Kelime Yönetimi için UPDATE endpoint (v1)
+@api_router.put("/v1/words/{word_id}")
+async def update_word_v1(
+    word_id: str,
+    word_update: UpdateWordModel,
+    current_user: dict = Depends(require_role("admin", "teacher"))
+):
+    """
+    ID'ye göre bir kelimeyi günceller.
+    Sadece gönderilen alanlar güncellenir.
+    """
+    # Önce kelimeyi bul
+    existing_word = await db.words.find_one({"id": word_id})
+    if not existing_word:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Kelime (ID: {word_id}) bulunamadı."
+        )
+    
+    # Güncellenecek alanları hazırla
+    update_data = {}
+    
+    if word_update.word is not None:
+        # Aynı kelime zaten var mı kontrol et (kendisi hariç)
+        existing = await db.words.find_one({
+            "english": word_update.word.lower(),
+            "id": {"$ne": word_id}
+        })
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"'{word_update.word}' kelimesi zaten mevcut."
+            )
+        update_data["english"] = word_update.word
+    
+    if word_update.translation is not None:
+        update_data["turkish"] = word_update.translation
+    
+    if word_update.level is not None:
+        update_data["difficulty"] = word_update.level
+    
+    if word_update.category is not None:
+        update_data["category"] = word_update.category
+    
+    # Hiçbir alan güncellenmemişse hata döndür
+    if not update_data:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Güncellenecek alan belirtilmedi."
+        )
+    
+    # Veritabanını güncelle
+    result = await db.words.update_one(
+        {"id": word_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Kelime (ID: {word_id}) bulunamadı."
+        )
+    
+    # Güncellenmiş kelimeyi getir
+    updated_word = await db.words.find_one({"id": word_id}, {"_id": 0})
+    
+    # WordModel formatına dönüştür
+    return {
+        "status": "success",
+        "message": "Kelime başarıyla güncellendi",
+        "word": {
+            "id": updated_word.get("id", ""),
+            "word": updated_word.get("english", ""),
+            "translation": updated_word.get("turkish", ""),
+            "level": updated_word.get("difficulty", 1),
+            "category": updated_word.get("category", "general")
+        }
+    }
+
 @api_router.delete("/words/{word_id}")
 async def delete_word(word_id: str, current_user: dict = Depends(require_role("admin", "teacher"))):
     
